@@ -51,6 +51,14 @@ def _run_scan(cfg_path: Optional[str] = None) -> None:
 
     if alerts:
         _print_alerts(alerts[:25])
+        from flow.institutional import model_info
+
+        info = model_info()
+        if info.get("synthetic"):
+            console.print(
+                "[dim]Nota: el score es heurístico — el modelo aún se entrena con datos "
+                "sintéticos. Ejecuta `python -m flow evaluate` para ver hit-rates reales.[/dim]"
+            )
         if res.get("bias"):
             _print_bias(res["bias"])
     else:
@@ -63,9 +71,17 @@ def _run_scan(cfg_path: Optional[str] = None) -> None:
             )
 
 
+def _inst_min_score(cfg) -> float:
+    inst = (cfg.get("heuristics") or {}).get("institutional") or {}
+    try:
+        return float(inst.get("min_score", 0.5))
+    except (TypeError, ValueError):
+        return 0.5
+
+
 def _print_alerts(alerts: list[dict]) -> None:
-    table = Table(title="Unusual / institutional AI flow alerts")
-    left = {"Underlying", "Why", "Bias", "CP", "Expiry", "AI Subtype"}
+    table = Table(title="Unusual / institutional flow alerts")
+    left = {"Underlying", "Why", "Bias", "CP", "Expiry", "Subtype"}
     for col in (
         "Underlying",
         "CP",
@@ -76,8 +92,8 @@ def _print_alerts(alerts: list[dict]) -> None:
         "Vol",
         "dVol",
         "Premium $",
-        "AI Score",
-        "AI Subtype",
+        "Score",
+        "Subtype",
         "Why",
     ):
         table.add_column(col, justify="left" if col in left else "right")
@@ -154,7 +170,7 @@ def show_alerts(
     """Show recent stored alerts."""
     cfg = _cfg(config)
     conn = db.connect(cfg["database"])
-    rows = db.recent_alerts(conn, limit=limit)
+    rows = db.recent_alerts(conn, limit=limit, min_score=_inst_min_score(cfg))
     if not rows:
         console.print("[dim]No alerts yet. Run: python -m flow scan[/]")
         raise typer.Exit(0)
@@ -170,7 +186,7 @@ def summary(
     """Call/put alert premium totals over the last N days."""
     cfg = _cfg(config)
     conn = db.connect(cfg["database"])
-    rows = db.weekly_summary(conn, days=days)
+    rows = db.weekly_summary(conn, days=days, min_score=_inst_min_score(cfg))
     info = db.latest_scan_info(conn)
     if info:
         console.print(f"Latest scan #{info['id']} at {info['scanned_at']}")
@@ -198,6 +214,56 @@ def summary(
     console.print(table)
     _print_bias(by_u)
     conn.close()
+
+
+@app.command()
+def evaluate(
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Hit-rate real del filtro institucional contra outcomes 1-5d resueltos."""
+    from flow.evaluate import evaluate as run_evaluation, format_report
+
+    cfg = _cfg(config)
+    conn = db.connect(cfg["database"])
+    try:
+        rep = run_evaluation(conn, min_score=0.0)
+        console.print(format_report(rep))
+        from flow.institutional import model_info
+
+        info = model_info()
+        console.print(
+            f"\n[dim]Modelo: {'sintético (heurístico)' if info.get('synthetic') else info.get('source', '?')} "
+            f"· n_train={info.get('n_train')}[/dim]"
+        )
+    finally:
+        conn.close()
+
+
+@app.command()
+def prune(
+    keep_days: int = typer.Option(14, "--keep-days", help="Keep snapshots newer than N days"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Delete snapshots (and orphan scans) older than --keep-days. Asks first."""
+    cfg = _cfg(config)
+    conn = db.connect(cfg["database"])
+    try:
+        old = conn.execute(
+            "SELECT COUNT(*) AS n FROM snapshots WHERE scan_id IN "
+            "(SELECT id FROM scans WHERE scanned_at < datetime('now', ?))",
+            (f"-{int(keep_days)} days",),
+        ).fetchone()["n"]
+        if not old:
+            console.print("[dim]Nothing to prune.[/dim]")
+            return
+        if not yes and not typer.confirm(f"Delete {old} snapshots older than {keep_days}d?"):
+            console.print("[dim]Cancelled.[/dim]")
+            raise typer.Exit(0)
+        n = db.cleanup_old_snapshots(conn, keep_days=keep_days)
+        console.print(f"[green]Pruned {n} old snapshots.[/green]")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

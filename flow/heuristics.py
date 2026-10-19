@@ -40,6 +40,8 @@ def score_contracts(
     previous: dict[str, sqlite3.Row] | None,
     scan_id: int,
     heuristics: dict[str, Any],
+    conn: sqlite3.Connection | None = None,
+    model_path=None,
 ) -> list[dict[str, Any]]:
     """
     Candidate unusual prints, then AI institutional filter.
@@ -151,6 +153,8 @@ def score_contracts(
         min_percentile=float(inst_cfg.get("min_percentile", 0.82)),
         cluster_percentile=float(inst_cfg.get("cluster_percentile", 0.68)),
         memory=heuristics.get("_memory"),
+        conn=conn,
+        model_path=model_path,
     )
     alerts.sort(key=lambda a: (a.get("inst_score") or 0, a.get("premium_usd") or 0), reverse=True)
     return alerts

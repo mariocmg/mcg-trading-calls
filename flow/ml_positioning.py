@@ -242,30 +242,68 @@ def _synthetic_training_set(rng: np.random.Generator, n: int = 1600) -> tuple[np
 
 
 _MODEL: Pipeline | None = None
+_MODEL_INFO: dict[str, Any] = {"synthetic": True, "source": "none", "n_train": 0}
 
 
-def get_model() -> Pipeline:
-    global _MODEL
-    if _MODEL is None:
-        rng = np.random.default_rng(7)
-        X, y = _synthetic_training_set(rng)
-        pipe = Pipeline(
-            [
-                ("scaler", StandardScaler()),
-                (
-                    "clf",
-                    GradientBoostingClassifier(
-                        random_state=7,
-                        max_depth=3,
-                        n_estimators=120,
-                        learning_rate=0.08,
+def default_model_path():
+    from pathlib import Path
+    import os
+
+    env = os.environ.get("FLOW_POSITIONING_MODEL_PATH")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parent.parent / "data" / "positioning_model.pkl"
+
+
+def get_model(model_path=None, force_retrain: bool = False) -> Pipeline:
+    """Regime classifier. Persisted with joblib so restarts don't retrain.
+
+    NOTE: this model is trained on synthetic structure data (see
+    _synthetic_training_set) — its output is blended with an explicit
+    structural prior, and the blend is what analyze_alerts() reports.
+    """
+    from pathlib import Path
+
+    global _MODEL, _MODEL_INFO
+    path = Path(model_path) if model_path else default_model_path()
+    if _MODEL is None or force_retrain:
+        if path.exists() and not force_retrain:
+            import joblib
+
+            _MODEL = joblib.load(path)
+            _MODEL_INFO = {"synthetic": True, "source": "joblib", "n_train": -1}
+        else:
+            rng = np.random.default_rng(7)
+            X, y = _synthetic_training_set(rng)
+            pipe = Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    (
+                        "clf",
+                        GradientBoostingClassifier(
+                            random_state=7,
+                            max_depth=3,
+                            n_estimators=120,
+                            learning_rate=0.08,
+                        ),
                     ),
-                ),
-            ]
-        )
-        pipe.fit(X, y)
-        _MODEL = pipe
+                ]
+            )
+            pipe.fit(X, y)
+            _MODEL = pipe
+            _MODEL_INFO = {"synthetic": True, "source": "synthetic", "n_train": len(y)}
+            try:
+                import joblib
+
+                path.parent.mkdir(parents=True, exist_ok=True)
+                joblib.dump(_MODEL, path)
+            except Exception:
+                pass
     return _MODEL
+
+
+def model_info() -> dict[str, Any]:
+    return dict(_MODEL_INFO)
 
 
 def structural_prior(feats: dict[str, float]) -> dict[str, float]:
@@ -370,7 +408,8 @@ class AnalysisResult:
                 "call_long_otm_share": self.features.get("call_long_otm_share", 0.0),
             },
             "model": (
-                "GradientBoosting on flow structure + structural prior "
+                "GradientBoosting on flow structure (trained on SYNTHETIC data — "
+                "heuristic, not learned market knowledge) + structural prior "
                 "(hedge vs directional; not raw put>call)"
             ),
         }
@@ -391,7 +430,7 @@ def _drivers(feats: dict[str, float], stance: str, alerts: list[dict[str, Any]] 
         if subtypes:
             counts = Counter(subtypes)
             top_sub = ", ".join(f"{k}: {v}" for k, v in counts.most_common(3))
-            out.append(f"Patrones detectados por IA: {top_sub}")
+            out.append(f"Patrones (score heurístico): {top_sub}")
 
     if stance == "HEDGING":
         out.append("Lectura: puts cortos/ATM-ish = protección de libro, no short institucional claro")

@@ -17,6 +17,7 @@ def run_scan(config_path: str | None = None) -> dict[str, Any]:
     cfg = load_config(Path(config_path) if config_path else None)
     h = cfg["heuristics"]
     conn = db.connect(cfg["database"])
+    model_path = Path(cfg["database"]).parent / "institutional_model.pkl"
 
     rows = fetch_watchlist(
         cfg["watchlist"],
@@ -33,26 +34,32 @@ def run_scan(config_path: str | None = None) -> dict[str, Any]:
     source = str(rows[0].get("source") or "")
     fallback = str(rows[0].get("fallback_reason") or "")
     scan_id = db.start_scan(conn)
-    n = db.insert_snapshots(conn, scan_id, rows)
-    prev_id = db.previous_scan_id(conn, scan_id)
-    prev_map = db.load_snapshot_map(conn, prev_id) if prev_id else None
+    try:
+        n = db.insert_snapshots(conn, scan_id, rows)
+        prev_id = db.previous_scan_id(conn, scan_id)
+        prev_map = db.load_snapshot_map(conn, prev_id) if prev_id else None
 
-    # If volumes jump vs previous snap (Cboe stale → Yahoo), baseline once.
-    baseline_only = _provider_reset(rows, prev_map)
-    if baseline_only:
-        alerts: list[dict[str, Any]] = []
-    else:
-        resolve_outcomes(conn, spots_from_rows(rows))
-        h = dict(h)
-        h["_memory"] = load_memory(conn)
-        alerts = score_contracts(rows, prev_map, scan_id, h)
-        db.insert_alerts(conn, alerts)
-    underlyings = sorted({str(r.get("underlying") or "").upper() for r in rows if r.get("underlying")})
-    positionings = {}
-    for und in underlyings:
-        p_book = summarize(rows, und)
-        db.save_positioning(conn, p_book)
-        positionings[und] = p_book
+        # If volumes jump vs previous snap (Cboe stale → Yahoo), baseline once.
+        baseline_only = _provider_reset(rows, prev_map)
+        if baseline_only:
+            alerts: list[dict[str, Any]] = []
+        else:
+            resolve_outcomes(conn, spots_from_rows(rows))
+            h = dict(h)
+            h["_memory"] = load_memory(conn)
+            alerts = score_contracts(rows, prev_map, scan_id, h, conn=conn, model_path=model_path)
+            db.insert_alerts(conn, alerts)
+        underlyings = sorted({str(r.get("underlying") or "").upper() for r in rows if r.get("underlying")})
+        positionings = {}
+        for und in underlyings:
+            p_book = summarize(rows, und)
+            db.save_positioning(conn, p_book)
+            positionings[und] = p_book
+    except Exception:
+        # Atomic scan: a mid-scan crash must not leave a half-written scan behind.
+        _delete_scan(conn, scan_id)
+        conn.close()
+        raise
     conn.close()
 
     primary_und = str(rows[0].get("underlying") or "MU").upper()
@@ -72,6 +79,17 @@ def run_scan(config_path: str | None = None) -> dict[str, Any]:
         "positioning": book,
         "all_positioning": positionings,
     }
+
+
+def _delete_scan(conn, scan_id: int) -> None:
+    """Remove every row written for scan_id (crash cleanup)."""
+    try:
+        conn.execute("DELETE FROM alerts WHERE scan_id = ?", (scan_id,))
+        conn.execute("DELETE FROM snapshots WHERE scan_id = ?", (scan_id,))
+        conn.execute("DELETE FROM scans WHERE id = ?", (scan_id,))
+        conn.commit()
+    except Exception:
+        pass
 
 
 def _provider_reset(

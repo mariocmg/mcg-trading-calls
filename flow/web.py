@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -20,7 +21,18 @@ from flow.vector import compute_vector
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-app = FastAPI(title="FLOW", description="Live delayed options positioning")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _loop, _watcher_started
+    _loop = asyncio.get_running_loop()
+    if not _watcher_started:
+        _watcher_started = True
+        threading.Thread(target=_watcher_loop, daemon=True, name="flow-live").start()
+    yield
+
+
+app = FastAPI(title="FLOW", description="Live delayed options positioning", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 _scan_lock = threading.Lock()
@@ -54,7 +66,21 @@ def _publish(event: dict[str, Any]) -> None:
     if _loop is None:
         return
     for q in queues:
-        _loop.call_soon_threadsafe(q.put_nowait, payload)
+        try:
+            _loop.call_soon_threadsafe(_safe_put, q, payload)
+        except RuntimeError:
+            pass  # loop closed; dropping event
+
+
+def _safe_put(q: asyncio.Queue, payload: dict[str, Any]) -> None:
+    """put_nowait that drops the event (or the slow subscriber) instead of
+    raising QueueFull inside the event loop."""
+    try:
+        q.put_nowait(payload)
+    except asyncio.QueueFull:
+        # Slow consumer: drop this event rather than crashing the publisher.
+        # The 15s SSE ping keeps the client alive; it will re-sync on next scan.
+        pass
 
 
 def _do_scan() -> dict[str, Any]:
@@ -113,15 +139,6 @@ def _watcher_loop() -> None:
             time.sleep(2)
 
 
-@app.on_event("startup")
-async def _startup() -> None:
-    global _loop, _watcher_started
-    _loop = asyncio.get_running_loop()
-    if not _watcher_started:
-        _watcher_started = True
-        threading.Thread(target=_watcher_loop, daemon=True, name="flow-live").start()
-
-
 @app.get("/")
 def index():
     return FileResponse(STATIC_DIR / "index.html")
@@ -158,9 +175,9 @@ def status():
 
 @app.get("/api/summary")
 def summary(days: int = Query(7, ge=1, le=90)):
-    conn, _ = _conn()
+    conn, cfg = _conn()
     try:
-        rows = [_row(r) for r in db.weekly_summary(conn, days=days)]
+        rows = [_row(r) for r in db.weekly_summary(conn, days=days, min_score=_inst_min_score(cfg))]
         by_u: dict[str, dict[str, float]] = {}
         for r in rows:
             u = r["underlying"]
@@ -189,6 +206,15 @@ def summary(days: int = Query(7, ge=1, le=90)):
         conn.close()
 
 
+def _inst_min_score(cfg: dict[str, Any]) -> float:
+    """Institutional score threshold — single source of truth: config.yaml."""
+    inst = (cfg.get("heuristics") or {}).get("institutional") or {}
+    try:
+        return float(inst.get("min_score", db.DEFAULT_MIN_SCORE))
+    except (TypeError, ValueError):
+        return db.DEFAULT_MIN_SCORE
+
+
 @app.get("/api/alerts")
 def alerts(
     limit: int = Query(80, ge=1, le=500),
@@ -197,42 +223,19 @@ def alerts(
     days: Optional[int] = Query(None, ge=1, le=90),
     after_id: Optional[int] = Query(None, ge=0),
 ):
-    from flow.market_hours import is_rth_timestamp
-
-    conn, _ = _conn()
+    conn, cfg = _conn()
     try:
-        if after_id is not None:
-            raw = conn.execute(
-                """
-                SELECT * FROM alerts
-                WHERE id > ?
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (after_id, max(limit * 4, 100)),
-            ).fetchall()
-            rows = []
-            for r in raw:
-                stamp = r["event_at"] or r["created_at"]
-                if not is_rth_timestamp(stamp):
-                    continue
-                label = r["inst_label"] if "inst_label" in r.keys() else None
-                score = r["inst_score"] if "inst_score" in r.keys() else None
-                if label not in ("INSTITUTIONAL", "HEDGE"):
-                    continue
-                if score is None or float(score) < 0.5:
-                    continue
-                rows.append(r)
-                if len(rows) >= limit:
-                    break
-        else:
-            rows = db.recent_alerts(
-                conn,
-                limit=limit,
-                underlying=underlying,
-                call_put=call_put,
-                days=days,
-            )
+        # One shared predicate for both paths (db.recent_alerts), so the
+        # incremental feed and the full list can never disagree.
+        rows = db.recent_alerts(
+            conn,
+            limit=limit,
+            underlying=underlying,
+            call_put=call_put,
+            days=days,
+            after_id=after_id,
+            min_score=_inst_min_score(cfg),
+        )
         return {
             "underlyings": db.list_underlyings(conn),
             "alerts": [_row(r) for r in rows],
@@ -249,13 +252,14 @@ def analysis(
     limit: int = Query(300, ge=20, le=1000),
 ):
     """ML institutional positioning from recent unusual/options alerts."""
-    conn, _ = _conn()
+    conn, cfg = _conn()
     try:
         rows = db.recent_alerts(
             conn,
             limit=limit,
             underlying=underlying.upper() if underlying else None,
             days=days,
+            min_score=_inst_min_score(cfg),
         )
         result = analyze_alerts([_row(r) for r in rows], underlying=underlying or "MU")
         return result.as_dict()
@@ -298,13 +302,14 @@ def vector(
     limit: int = Query(400, ge=20, le=1500),
 ):
     """BladeMap-style Vector Board row for the selected symbol."""
-    conn, _ = _conn()
+    conn, cfg = _conn()
     try:
         rows = db.recent_alerts(
             conn,
             limit=limit,
             underlying=underlying.upper() if underlying else None,
             days=days,
+            min_score=_inst_min_score(cfg),
         )
         return compute_vector([_row(r) for r in rows], underlying=underlying or "MU")
     finally:
