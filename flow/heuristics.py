@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sqlite3
+from statistics import median
 from typing import Any
 
+from flow import db as _db
 from flow.institutional import filter_institutional
 from flow.market_hours import (
     is_current_session_trade,
@@ -10,6 +12,38 @@ from flow.market_hours import (
     to_iso_utc,
     us_equity_options_open,
 )
+
+
+def _tod_score(trade_dt) -> float:
+    """Time-of-day score: institutional blocks cluster at the open/close."""
+    if trade_dt is None:
+        return 0.5
+    try:
+        mins = trade_dt.hour * 60 + trade_dt.minute - 9 * 60 - 30  # mins since 9:30 ET
+    except Exception:
+        return 0.5
+    if mins < 0 or mins > 390:
+        return 0.3
+    if mins <= 30 or mins >= 360:
+        return 1.0
+    if mins <= 60 or mins >= 330:
+        return 0.7
+    return 0.35
+
+
+def _is_block(delta_vol: int, contract: str, conn) -> bool:
+    """A huge single-scan volume jump vs the contract's own history."""
+    if delta_vol < 250:
+        return False
+    baseline = 50
+    if conn is not None:
+        try:
+            hist = _db.contract_delta_history(conn, contract, 5)
+            if hist:
+                baseline = max(median(hist), 1)
+        except Exception:
+            pass
+    return delta_vol >= max(500, 3 * baseline)
 
 
 def _price(row: dict[str, Any] | sqlite3.Row) -> float | None:
@@ -115,6 +149,37 @@ def score_contracts(
         except (TypeError, ValueError):
             spot_f = None
 
+        # Microstructure vs previous snapshot
+        iv_change = 0.0
+        oi_change = 0
+        if prev is not None:
+            try:
+                iv_now = row.get("implied_volatility")
+                iv_prev = prev["implied_volatility"]
+                if iv_now is not None and iv_prev:
+                    iv_change = round(float(iv_now) - float(iv_prev), 4)
+            except (TypeError, ValueError, IndexError, KeyError):
+                pass
+            try:
+                oi_change = oi - int(prev["open_interest"] or 0)
+            except (TypeError, ValueError, IndexError, KeyError):
+                oi_change = 0
+        prev_oi = max(int(prev["open_interest"] or 0) if prev is not None else 0, 1)
+        oi_change_norm = round(oi_change / prev_oi, 4)
+
+        # Volume vs the contract's own recent history
+        rel_vol = 1.0
+        if conn is not None:
+            try:
+                hist = _db.contract_volume_history(conn, str(row["contract"]), 10)
+                hist = [v for v in hist if v > 0]
+                if hist:
+                    rel_vol = round(vol / max(median(hist), 1), 3)
+            except Exception:
+                pass
+
+        is_block = _is_block(delta_vol, str(row["contract"]), conn)
+
         candidates.append(
             {
                 "scan_id": scan_id,
@@ -138,6 +203,12 @@ def score_contracts(
                 "gamma": row.get("gamma"),
                 "bid": row.get("bid"),
                 "ask": row.get("ask"),
+                "iv_change": iv_change,
+                "oi_change": oi_change,
+                "oi_change_norm": oi_change_norm,
+                "rel_vol": rel_vol,
+                "tod_score": _tod_score(trade_dt),
+                "is_block": 1 if is_block else 0,
             }
         )
 
@@ -156,6 +227,24 @@ def score_contracts(
         conn=conn,
         model_path=model_path,
     )
+
+    # Multi-leg structures: a desk trades packages, not single contracts.
+    # Combos add a score bonus and are persisted for the UI.
+    from flow.combos import combos_for_alert, detect_combos
+
+    combos = detect_combos(alerts)
+    for a in alerts:
+        ac = combos_for_alert(a, combos)
+        if ac:
+            best = max(ac, key=lambda c: c.confidence)
+            a["combo_type"] = best.combo_type
+            a["inst_score"] = min(0.98, round(float(a["inst_score"]) + 0.05 * best.confidence, 3))
+            reason = str(a.get("reason") or "")
+            a["reason"] = f"{reason},combo:{best.combo_type}" if reason else f"combo:{best.combo_type}"
+        if a.get("is_block"):
+            reason = str(a.get("reason") or "")
+            a["reason"] = f"{reason},block" if reason else "block"
+
     alerts.sort(key=lambda a: (a.get("inst_score") or 0, a.get("premium_usd") or 0), reverse=True)
     return alerts
 

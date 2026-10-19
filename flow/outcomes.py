@@ -1,4 +1,13 @@
-"""Resolve 1–5 day price follow-through and feed it back into the AI score."""
+"""Resolve 1–5 day price follow-through and feed it back into the score.
+
+Labels are designed to measure *edge*, not luck:
+- ATR-normalized: a move smaller than 0.5× ATR(14) is noise, not a hit.
+- Beta-adjusted: subtract the SPY return over the same window, so a thesis
+  that "worked" only because the whole market ripped doesn't count.
+- OI persistence: institutional accumulation keeps OI growing over the next
+  sessions; retail lotto decays. Stored as outcome_oi_growth for future
+  training and shown in evaluate/backtest.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from flow.institutional import bucket_key
+from flow.market_data import get_atr_pct, spy_return_between
 
 
 def _parse_ts(value: str | None) -> datetime | None:
@@ -26,21 +36,39 @@ def load_memory(conn: sqlite3.Connection) -> dict[str, tuple[int, int]]:
     return {str(r["bucket"]): (int(r["hits"]), int(r["n"])) for r in rows}
 
 
+def _thesis_hit(bearish: bool, adj_ret: float, min_move: float) -> int:
+    """1 if the beta-adjusted move clears the ATR noise floor in thesis direction."""
+    if abs(adj_ret) < min_move:
+        return 0
+    if bearish:
+        return 1 if adj_ret < 0 else 0
+    return 1 if adj_ret > 0 else 0
+
+
 def resolve_outcomes(conn: sqlite3.Connection, spots: dict[str, float]) -> int:
     """
-    Alerts aged 1–5 days: call thesis hits if spot rose, put/hedge if it fell.
-    Updates inst_memory so similar prints score higher or lower next time.
+    Alerts aged 1–5 days: resolve against ATR-normalized, SPY-adjusted
+    follow-through and OI persistence. Updates inst_memory so similar prints
+    score higher or lower next time.
     """
+    from flow.db import latest_oi_map
+
     now = datetime.now(timezone.utc)
     lo = now - timedelta(days=6)
     hi = now - timedelta(days=1)
     rows = conn.execute(
         """
-        SELECT id, underlying, call_put, inst_label, spot, dte, otm_pct, created_at
+        SELECT id, underlying, call_put, inst_label, spot, dte, otm_pct,
+               created_at, contract, open_interest
         FROM alerts
         WHERE outcome_hit IS NULL AND spot IS NOT NULL AND spot > 0
         """
     ).fetchall()
+    if not rows:
+        return 0
+
+    oi_now = latest_oi_map(conn)
+    atr_cache: dict[str, float | None] = {}
     n = 0
     for r in rows:
         ts = _parse_ts(r["created_at"])
@@ -55,21 +83,48 @@ def resolve_outcomes(conn: sqlite3.Connection, spots: dict[str, float]) -> int:
         entry = float(r["spot"] or 0)
         if spot_now <= 0 or entry <= 0:
             continue
-        ret = spot_now / entry - 1.0
+
+        raw_ret = spot_now / entry - 1.0
+
+        # ATR noise floor (0.5× ATR); fallback to the old 0.4% if unavailable.
+        if und not in atr_cache:
+            try:
+                atr_cache[und] = get_atr_pct(und)
+            except Exception:  # noqa: BLE001 - best effort
+                atr_cache[und] = None
+        atr_pct = atr_cache[und]
+        min_move = 0.5 * atr_pct if atr_pct else 0.004
+
+        # Beta adjustment vs SPY over the same window.
+        adj_ret = raw_ret
+        try:
+            spy_ret = spy_return_between(ts.date().isoformat(), now.date().isoformat())
+            if spy_ret is not None:
+                adj_ret = raw_ret - spy_ret  # beta ≈ 1
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+
         bearish = r["call_put"] == "P" or r["inst_label"] == "HEDGE"
-        if abs(ret) < 0.004:
-            hit = 0
-        elif bearish:
-            hit = 1 if ret < 0 else 0
-        else:
-            hit = 1 if ret > 0 else 0
+        hit = _thesis_hit(bearish, adj_ret, min_move)
+
+        # OI persistence: is the position still being built?
+        oi_growth = None
+        try:
+            oi_then = float(r["open_interest"] or 0)
+            oi_today = float(oi_now.get(str(r["contract"]), 0))
+            if oi_then > 0:
+                oi_growth = round(oi_today / oi_then - 1.0, 4)
+        except Exception:  # noqa: BLE001
+            pass
+
         conn.execute(
             """
             UPDATE alerts
-            SET outcome_hit = ?, outcome_return = ?, outcome_at = ?
+            SET outcome_hit = ?, outcome_return = ?, outcome_adj_return = ?,
+                outcome_oi_growth = ?, outcome_at = ?
             WHERE id = ?
             """,
-            (hit, round(ret, 5), now.isoformat(), int(r["id"])),
+            (hit, round(raw_ret, 5), round(adj_ret, 5), oi_growth, now.isoformat(), int(r["id"])),
         )
         key = bucket_key(
             {

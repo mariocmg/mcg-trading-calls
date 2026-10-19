@@ -42,7 +42,14 @@ FEATURE_NAMES = [
     "opening_risk",     # day vol or delta vol > open interest
     "sweet_spot_dte",   # 14 to 60 DTE institutional catalyst window
     "cluster_flag",     # multi-strike desk execution
+    "iv_change",        # Δ implied vol vs previous snapshot (institutional lifts IV)
+    "rel_vol",          # volume vs the contract's own recent median
+    "oi_accel",         # OI change normalized (opening vs churn)
+    "tod_score",        # time-of-day: blocks cluster at open/close
 ]
+
+#: Bump when FEATURE_NAMES changes — old persisted models are retrained.
+FEATURE_VERSION = 2
 
 _MODEL: CalibratedClassifierCV | None = None
 
@@ -91,6 +98,14 @@ def contract_features(a: dict[str, Any], premium_rank: float = 0.5, cluster_n: i
     sweet_spot = 1.0 if (14 <= dte <= 60) else 0.0
     cluster_flag = 1.0 if cluster_n >= 2 else 0.0
 
+    # New microstructure features (computed upstream in heuristics.py)
+    iv_chg = _safe(a.get("iv_change"))
+    iv_change = max(-0.5, min(0.5, iv_chg))
+    rel = max(_safe(a.get("rel_vol"), 1.0), 0.0)
+    rel_vol = max(0.0, min(1.0, float(np.log1p(rel)) / float(np.log1p(10.0))))
+    oi_accel = max(-1.0, min(1.0, _safe(a.get("oi_change_norm")) / 2.0))
+    tod_score = max(0.0, min(1.0, _safe(a.get("tod_score"), 0.5)))
+
     return {
         "log_premium": _log1p(prem),
         "log_day_premium": _log1p(day_prem),
@@ -110,6 +125,10 @@ def contract_features(a: dict[str, Any], premium_rank: float = 0.5, cluster_n: i
         "opening_risk": opening,
         "sweet_spot_dte": sweet_spot,
         "cluster_flag": cluster_flag,
+        "iv_change": iv_change,
+        "rel_vol": rel_vol,
+        "oi_accel": oi_accel,
+        "tod_score": tod_score,
     }
 
 
@@ -147,6 +166,10 @@ def _synthetic(rng: np.random.Generator, n: int = 3000) -> tuple[np.ndarray, np.
             opening = 1.0 if rng.random() < 0.70 else 0.0
             sweet_spot = 1.0 if (14 <= dte_val <= 60) else 0.0
             cluster = 1.0 if rng.random() < 0.40 else 0.0
+            iv_chg = float(np.clip(rng.normal(0.03, 0.06), -0.5, 0.5))
+            rel_v = float(min(1.0, np.log1p(max(rng.lognormal(1.0, 0.7), 0.0)) / np.log1p(10.0)))
+            oi_ac = float(np.clip(rng.normal(0.35, 0.4) / 2.0, -1.0, 1.0))
+            tod = float(rng.choice([0.85, 0.3], p=[0.6, 0.4]))
         else:
             # Retail noise: smaller premium, higher lottery chance, extreme OTM, 0-3 DTE
             prem = float(np.exp(rng.normal(9.9, 0.95)))   # ~$20k median
@@ -168,6 +191,10 @@ def _synthetic(rng: np.random.Generator, n: int = 3000) -> tuple[np.ndarray, np.
             opening = 1.0 if rng.random() < 0.25 else 0.0
             sweet_spot = 1.0 if (14 <= dte_val <= 60) else 0.0
             cluster = 1.0 if rng.random() < 0.10 else 0.0
+            iv_chg = float(np.clip(rng.normal(0.0, 0.03), -0.5, 0.5))
+            rel_v = float(min(1.0, np.log1p(max(rng.lognormal(-0.5, 0.7), 0.0)) / np.log1p(10.0)))
+            oi_ac = float(np.clip(rng.normal(0.0, 0.2) / 2.0, -1.0, 1.0))
+            tod = float(rng.uniform(0.0, 0.5))
 
         row = [
             _log1p(prem),
@@ -188,6 +215,10 @@ def _synthetic(rng: np.random.Generator, n: int = 3000) -> tuple[np.ndarray, np.
             opening,
             sweet_spot,
             cluster,
+            iv_chg,
+            rel_v,
+            oi_ac,
+            tod,
         ]
         X.append(row)
         y.append(label)
@@ -242,7 +273,8 @@ def _train_from_outcomes(conn) -> tuple | None:
     rows = conn.execute(
         """
         SELECT premium_usd, price, volume, open_interest, delta_volume,
-               otm_pct, dte, call_put, side_bias, spot, cluster_n, outcome_hit
+               otm_pct, dte, call_put, side_bias, spot, cluster_n, outcome_hit,
+               iv_change, rel_vol, oi_change_norm, tod_score
         FROM alerts
         WHERE outcome_hit IS NOT NULL
           AND inst_score IS NOT NULL
@@ -313,16 +345,19 @@ def get_model(conn=None, model_path=None, force_retrain: bool = False) -> Calibr
         and _count_labels(conn) >= MIN_REAL_LABELS
     )
     if _MODEL is None or force_retrain or upgrade:
+        _MODEL = None  # ensure stale feature-count models are never reused below
         if path.exists() and not force_retrain and not upgrade:
             import joblib
 
-            _MODEL = joblib.load(path)
-            _MODEL_INFO = {
-                "synthetic": bool(getattr(_MODEL, "_flow_synthetic", True)),
-                "source": "joblib",
-                "n_train": -1,
-            }
-        else:
+            loaded = joblib.load(path)
+            if getattr(loaded, "_flow_feat_ver", 1) == FEATURE_VERSION:
+                _MODEL = loaded
+                _MODEL_INFO = {
+                    "synthetic": bool(getattr(_MODEL, "_flow_synthetic", True)),
+                    "source": "joblib",
+                    "n_train": -1,
+                }
+        if _MODEL is None:
             trained = _train_from_outcomes(conn) if conn is not None else None
             if trained is not None:
                 _MODEL, _MODEL_INFO = trained
@@ -333,6 +368,7 @@ def get_model(conn=None, model_path=None, force_retrain: bool = False) -> Calibr
 
                 path.parent.mkdir(parents=True, exist_ok=True)
                 _MODEL._flow_synthetic = _MODEL_INFO["synthetic"]
+                _MODEL._flow_feat_ver = FEATURE_VERSION
                 joblib.dump(_MODEL, path)
             except Exception:
                 pass  # persistence is best-effort; the in-memory model still works

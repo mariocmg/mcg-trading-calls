@@ -129,6 +129,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE alerts ADD COLUMN inst_ml_prob REAL")
     if "inst_pct" not in cols:
         conn.execute("ALTER TABLE alerts ADD COLUMN inst_pct REAL")
+    if "is_block" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN is_block INTEGER")
+    if "combo_type" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN combo_type TEXT")
+    if "outcome_oi_growth" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN outcome_oi_growth REAL")
+    if "outcome_adj_return" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN outcome_adj_return REAL")
+    for col in ("iv_change", "rel_vol", "oi_change_norm", "tod_score"):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE alerts ADD COLUMN {col} REAL")
+    # snapshots: gamma for GEX levels
+    snap_cols = {r[1] for r in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
+    if "gamma" not in snap_cols:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN gamma REAL")
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS inst_memory (
@@ -136,6 +151,24 @@ def _migrate(conn: sqlite3.Connection) -> None:
             hits INTEGER NOT NULL DEFAULT 0,
             n INTEGER NOT NULL DEFAULT 0
         );
+        CREATE TABLE IF NOT EXISTS strike_levels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_id INTEGER NOT NULL REFERENCES scans(id),
+            computed_at TEXT NOT NULL,
+            underlying TEXT NOT NULL,
+            expiry TEXT NOT NULL,
+            strike REAL NOT NULL,
+            call_oi INTEGER,
+            put_oi INTEGER,
+            call_gex REAL,
+            put_gex REAL,
+            net_gex REAL,
+            call_premium REAL,
+            put_premium REAL,
+            UNIQUE(scan_id, underlying, expiry, strike)
+        );
+        CREATE INDEX IF NOT EXISTS idx_levels_lookup
+            ON strike_levels(underlying, expiry, scan_id);
         CREATE TABLE IF NOT EXISTS positioning (
             underlying TEXT PRIMARY KEY,
             updated_at TEXT NOT NULL,
@@ -261,6 +294,7 @@ def insert_snapshots(
             r.get("open_interest"),
             r.get("implied_volatility"),
             r.get("dte"),
+            r.get("gamma"),
         )
         for r in rows
     ]
@@ -268,8 +302,8 @@ def insert_snapshots(
         """
         INSERT OR REPLACE INTO snapshots (
             scan_id, underlying, expiry, contract, call_put, strike,
-            last, bid, ask, volume, open_interest, implied_volatility, dte
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            last, bid, ask, volume, open_interest, implied_volatility, dte, gamma
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         payload,
     )
@@ -308,6 +342,12 @@ def insert_alerts(conn: sqlite3.Connection, alerts: Iterable[dict[str, Any]]) ->
             a.get("inst_pct"),
             a.get("cluster_n"),
             a.get("opening"),
+            a.get("is_block"),
+            a.get("combo_type"),
+            a.get("iv_change"),
+            a.get("rel_vol"),
+            a.get("oi_change_norm"),
+            a.get("tod_score"),
         )
         for a in alerts
     ]
@@ -320,8 +360,9 @@ def insert_alerts(conn: sqlite3.Connection, alerts: Iterable[dict[str, Any]]) ->
             dte, price, volume, open_interest, delta_volume, premium_usd,
             vol_oi_ratio, reason, side_bias, spot, otm_pct,
             inst_score, inst_label, inst_reason, inst_subtype, inst_ml_prob, inst_pct,
-            cluster_n, opening
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            cluster_n, opening, is_block, combo_type,
+            iv_change, rel_vol, oi_change_norm, tod_score
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         payload,
     )
@@ -477,3 +518,133 @@ def list_underlyings(conn: sqlite3.Connection) -> list[str]:
         "SELECT DISTINCT underlying FROM alerts ORDER BY underlying"
     ).fetchall()
     return [r["underlying"] for r in rows]
+
+
+def save_strike_levels(
+    conn: sqlite3.Connection, scan_id: int, underlying: str, levels: list[dict[str, Any]]
+) -> int:
+    """Persist per-strike GEX/OI/premium levels for one scan."""
+    now = datetime.now(timezone.utc).isoformat()
+    payload = [
+        (
+            scan_id,
+            now,
+            underlying.upper(),
+            lv["expiry"],
+            lv["strike"],
+            lv.get("call_oi"),
+            lv.get("put_oi"),
+            lv.get("call_gex"),
+            lv.get("put_gex"),
+            lv.get("net_gex"),
+            lv.get("call_premium"),
+            lv.get("put_premium"),
+        )
+        for lv in levels
+    ]
+    if not payload:
+        return 0
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO strike_levels (
+            scan_id, computed_at, underlying, expiry, strike,
+            call_oi, put_oi, call_gex, put_gex, net_gex, call_premium, put_premium
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        payload,
+    )
+    conn.commit()
+    return len(payload)
+
+
+def load_strike_levels(
+    conn: sqlite3.Connection, underlying: str, scan_id: int | None = None
+) -> list[dict[str, Any]]:
+    """Latest strike levels for an underlying (defaults to the newest scan)."""
+    if scan_id is None:
+        row = conn.execute(
+            "SELECT MAX(scan_id) AS sid FROM strike_levels WHERE underlying = ?",
+            (underlying.upper(),),
+        ).fetchone()
+        if not row or row["sid"] is None:
+            return []
+        scan_id = int(row["sid"])
+    rows = conn.execute(
+        "SELECT * FROM strike_levels WHERE underlying = ? AND scan_id = ? ORDER BY strike",
+        (underlying.upper(), scan_id),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def contract_delta_history(
+    conn: sqlite3.Connection, contract: str, n: int = 5
+) -> list[int]:
+    """Recent per-scan delta_volume values for a contract (for block detection)."""
+    rows = conn.execute(
+        "SELECT delta_volume FROM alerts WHERE contract = ? ORDER BY id DESC LIMIT ?",
+        (contract, n),
+    ).fetchall()
+    return [int(r["delta_volume"] or 0) for r in rows]
+
+
+def contract_volume_history(
+    conn: sqlite3.Connection, contract: str, n: int = 10
+) -> list[int]:
+    """Recent per-scan volumes for a contract (for relative-volume features)."""
+    rows = conn.execute(
+        "SELECT volume FROM snapshots WHERE contract = ? ORDER BY scan_id DESC LIMIT ?",
+        (contract, n),
+    ).fetchall()
+    return [int(r["volume"] or 0) for r in rows]
+
+
+def latest_snapshots(
+    conn: sqlite3.Connection, underlying: str
+) -> list[dict[str, Any]]:
+    """Chain rows from the most recent scan for one underlying."""
+    row = conn.execute("SELECT MAX(id) AS sid FROM scans").fetchone()
+    if not row or row["sid"] is None:
+        return []
+    rows = conn.execute(
+        "SELECT * FROM snapshots WHERE scan_id = ? AND underlying = ?",
+        (int(row["sid"]), underlying.upper()),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def latest_oi_map(conn: sqlite3.Connection) -> dict[str, int]:
+    """Open interest per contract from the most recent scan."""
+    row = conn.execute("SELECT MAX(id) AS sid FROM scans").fetchone()
+    if not row or row["sid"] is None:
+        return {}
+    rows = conn.execute(
+        "SELECT contract, open_interest FROM snapshots WHERE scan_id = ?",
+        (int(row["sid"]),),
+    ).fetchall()
+    return {r["contract"]: int(r["open_interest"] or 0) for r in rows}
+
+
+def calibration_lookup(
+    conn: sqlite3.Connection, direction: str, n_checks: int
+) -> tuple[int, int]:
+    """(hits, n) of resolved outcomes for setups like this one.
+
+    Used to empirically calibrate vector confidence: how often did past
+    BULLISH/BEARISH calls with this many evidence checks actually work?
+    """
+    rows = conn.execute(
+        """
+        SELECT outcome_hit FROM alerts
+        WHERE outcome_hit IS NOT NULL
+          AND (
+            (call_put = 'C' AND ? = 'BULLISH')
+            OR (call_put = 'P' AND ? = 'BEARISH')
+            OR (inst_label = 'HEDGE' AND ? = 'BEARISH')
+          )
+        """,
+        (direction, direction, direction),
+    ).fetchall()
+    # NOTE: n_checks bucketing is approximated by score tercile until we
+    # persist the check count per alert (see vector output `checks_ok`).
+    hits = sum(int(r["outcome_hit"]) for r in rows)
+    return hits, len(rows)
