@@ -244,6 +244,87 @@ def _synthetic_training_set(rng: np.random.Generator, n: int = 1600) -> tuple[np
 _MODEL: Pipeline | None = None
 _MODEL_INFO: dict[str, Any] = {"synthetic": True, "source": "none", "n_train": 0}
 
+#: Minimum daily batches with resolved outcomes before the regime model
+#: trains on real labels instead of the synthetic structure prior.
+MIN_REAL_BATCHES = 60
+
+
+def _count_batches(conn) -> int:
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS n FROM (
+                SELECT underlying, date(created_at) AS d
+                FROM alerts
+                WHERE outcome_adj_return IS NOT NULL
+                GROUP BY underlying, date(created_at)
+                HAVING COUNT(*) >= 5
+            )
+            """
+        ).fetchone()
+        return int(row["n"]) if row else 0
+    except Exception:
+        return 0
+
+
+def _train_from_outcomes(conn) -> tuple | None:
+    """Train the regime classifier on REAL daily outcomes.
+
+    Each (underlying, day) batch with ≥5 resolved alerts becomes one training
+    row: structure features → the direction that actually worked (ATR/beta-
+    adjusted median return), or HEDGING when the tape was put-heavy near-term
+    and went nowhere.
+    """
+    import numpy as np
+
+    rows = conn.execute(
+        """
+        SELECT underlying, date(created_at) AS d, call_put, premium_usd,
+               dte, otm_pct, delta_volume, volume, outcome_adj_return
+        FROM alerts
+        WHERE outcome_adj_return IS NOT NULL
+        ORDER BY underlying, d
+        """
+    ).fetchall()
+    batches: dict[tuple[str, str], list[dict]] = {}
+    for r in rows:
+        batches.setdefault((str(r["underlying"]), str(r["d"])), []).append(dict(r))
+    X, y = [], []
+    for (und, day), items in batches.items():
+        if len(items) < 5:
+            continue
+        feats = extract_features(items)
+        med = float(np.median([float(i["outcome_adj_return"]) for i in items]))
+        call_prem = sum(float(i["premium_usd"] or 0) for i in items if i["call_put"] == "C")
+        put_prem = sum(float(i["premium_usd"] or 0) for i in items if i["call_put"] == "P")
+        tot = call_prem + put_prem
+        put_share = put_prem / tot if tot > 0 else 0.5
+        if med > 0.008:
+            label = 3  # BULLISH
+        elif med < -0.008:
+            label = 0  # BEARISH
+        elif put_share > 0.6 and feats.get("put_near_share", 0) > 0.5:
+            label = 1  # HEDGING
+        else:
+            label = 2  # MIXED
+        X.append([feats[k] for k in FEATURE_NAMES])
+        y.append(label)
+    if len(X) < MIN_REAL_BATCHES or len(set(y)) < 2:
+        return None
+    pipe = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "clf",
+                GradientBoostingClassifier(
+                    random_state=7, max_depth=3, n_estimators=120, learning_rate=0.08
+                ),
+            ),
+        ]
+    )
+    pipe.fit(np.asarray(X, dtype=float), np.asarray(y, dtype=int))
+    return pipe, {"synthetic": False, "source": "outcomes", "n_train": len(y)}
+
 
 def default_model_path():
     from pathlib import Path
@@ -255,47 +336,65 @@ def default_model_path():
     return Path(__file__).resolve().parent.parent / "data" / "positioning_model.pkl"
 
 
-def get_model(model_path=None, force_retrain: bool = False) -> Pipeline:
+def get_model(conn=None, model_path=None, force_retrain: bool = False) -> Pipeline:
     """Regime classifier. Persisted with joblib so restarts don't retrain.
 
-    NOTE: this model is trained on synthetic structure data (see
-    _synthetic_training_set) — its output is blended with an explicit
-    structural prior, and the blend is what analyze_alerts() reports.
+    Load order: (1) persisted joblib model, (2) train on real daily outcome
+    labels if enough exist, (3) synthetic structure bootstrap. If the cached
+    model is synthetic and enough real labels have accumulated since, it
+    upgrades automatically. Use model_info() to see which training data was
+    used.
     """
     from pathlib import Path
 
     global _MODEL, _MODEL_INFO
     path = Path(model_path) if model_path else default_model_path()
-    if _MODEL is None or force_retrain:
-        if path.exists() and not force_retrain:
+    upgrade = (
+        _MODEL is not None
+        and _MODEL_INFO.get("synthetic")
+        and conn is not None
+        and _count_batches(conn) >= MIN_REAL_BATCHES
+    )
+    if _MODEL is None or force_retrain or upgrade:
+        _MODEL = None  # never reuse a stale model below
+        if path.exists() and not force_retrain and not upgrade:
             import joblib
 
             _MODEL = joblib.load(path)
-            _MODEL_INFO = {"synthetic": True, "source": "joblib", "n_train": -1}
-        else:
-            rng = np.random.default_rng(7)
-            X, y = _synthetic_training_set(rng)
-            pipe = Pipeline(
-                [
-                    ("scaler", StandardScaler()),
-                    (
-                        "clf",
-                        GradientBoostingClassifier(
-                            random_state=7,
-                            max_depth=3,
-                            n_estimators=120,
-                            learning_rate=0.08,
+            _MODEL_INFO = {
+                "synthetic": bool(getattr(_MODEL, "_flow_synthetic", True)),
+                "source": "joblib",
+                "n_train": -1,
+            }
+        if _MODEL is None:
+            trained = _train_from_outcomes(conn) if conn is not None else None
+            if trained is not None:
+                _MODEL, _MODEL_INFO = trained
+            else:
+                rng = np.random.default_rng(7)
+                X, y = _synthetic_training_set(rng)
+                pipe = Pipeline(
+                    [
+                        ("scaler", StandardScaler()),
+                        (
+                            "clf",
+                            GradientBoostingClassifier(
+                                random_state=7,
+                                max_depth=3,
+                                n_estimators=120,
+                                learning_rate=0.08,
+                            ),
                         ),
-                    ),
-                ]
-            )
-            pipe.fit(X, y)
-            _MODEL = pipe
-            _MODEL_INFO = {"synthetic": True, "source": "synthetic", "n_train": len(y)}
+                    ]
+                )
+                pipe.fit(X, y)
+                _MODEL = pipe
+                _MODEL_INFO = {"synthetic": True, "source": "synthetic", "n_train": len(y)}
             try:
                 import joblib
 
                 path.parent.mkdir(parents=True, exist_ok=True)
+                _MODEL._flow_synthetic = _MODEL_INFO["synthetic"]
                 joblib.dump(_MODEL, path)
             except Exception:
                 pass
@@ -474,6 +573,7 @@ def _summary(underlying: str, stance: str, conf: float, feats: dict[str, float])
 def analyze_alerts(
     alerts: list[dict[str, Any]],
     underlying: str = "MU",
+    conn=None,
 ) -> AnalysisResult:
     scoped = [
         a
@@ -493,7 +593,7 @@ def analyze_alerts(
             n_alerts=0,
         )
 
-    model = get_model()
+    model = get_model(conn=conn)
     raw = model.predict_proba(_feature_vector(feats))[0]
     classes = list(model.named_steps["clf"].classes_)
     ml = {LABELS[int(c)]: float(p) for c, p in zip(classes, raw)}

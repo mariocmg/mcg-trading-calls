@@ -261,7 +261,9 @@ def analysis(
             days=days,
             min_score=_inst_min_score(cfg),
         )
-        result = analyze_alerts([_row(r) for r in rows], underlying=underlying or "MU")
+        result = analyze_alerts(
+            [_row(r) for r in rows], underlying=underlying or "MU", conn=conn
+        )
         return result.as_dict()
     finally:
         conn.close()

@@ -42,6 +42,63 @@ def close_stale(conn: sqlite3.Connection, max_age_hours: float = 6.0) -> int:
     return db.close_stale_campaigns(conn, max_age_hours=max_age_hours)
 
 
+def resolve_outcomes(
+    conn: sqlite3.Connection,
+    spots: dict[str, float],
+    horizon_days: float = 3.0,
+) -> int:
+    """Did the desk's campaign work? Resolve campaigns whose accumulation
+    ended >= horizon_days ago, using the same ATR/beta-adjusted labeling
+    as alert outcomes."""
+    from datetime import datetime, timezone
+
+    from flow.outcomes import label_follow_through
+
+    now = datetime.now(timezone.utc)
+    rows = conn.execute(
+        """
+        SELECT * FROM campaigns
+        WHERE outcome_hit IS NULL
+          AND entry_spot IS NOT NULL AND entry_spot > 0
+          AND updated_at <= datetime('now', ?)
+        """,
+        (f"-{horizon_days} days",),
+    ).fetchall()
+    if not rows:
+        return 0
+    atr_cache: dict[str, float | None] = {}
+    n = 0
+    for r in rows:
+        c = dict(r)
+        und = str(c.get("underlying") or "").upper()
+        spot_now = float(spots.get(und) or 0)
+        entry = float(c.get("entry_spot") or 0)
+        if spot_now <= 0 or entry <= 0:
+            continue
+        try:
+            started = datetime.fromisoformat(str(c.get("started_at")).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        bearish = str(c.get("direction") or "") == "BEARISH"
+        hit, raw_ret, _adj = label_follow_through(
+            und, entry, started, spot_now, bearish, atr_cache
+        )
+        conn.execute(
+            """
+            UPDATE campaigns
+            SET outcome_hit = ?, outcome_return = ?, outcome_at = ?
+            WHERE id = ?
+            """,
+            (hit, round(raw_ret, 5), now.isoformat(), int(c["id"])),
+        )
+        n += 1
+    if n:
+        conn.commit()
+    return n
+
+
 def active_summary(
     conn: sqlite3.Connection, underlying: str | None = None, limit: int = 10
 ) -> list[dict[str, Any]]:

@@ -62,7 +62,13 @@ def run_scan(config_path: str | None = None) -> dict[str, Any]:
         elif not quality_ok:
             alerts = []
         else:
-            resolve_outcomes(conn, spots_from_rows(rows))
+            half_life = float((h.get("memory") or {}).get("half_life_days", 30))
+            spots = spots_from_rows(rows)
+            resolve_outcomes(conn, spots, half_life_days=half_life)
+            # Campaign outcomes: did the desk's accumulation work?
+            from flow import campaigns as _campaigns
+
+            _campaigns.resolve_outcomes(conn, spots)
             h = dict(h)
             h["_memory"] = load_memory(conn)
             alerts = score_contracts(rows, prev_map, scan_id, h, conn=conn, model_path=model_path)

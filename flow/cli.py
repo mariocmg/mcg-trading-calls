@@ -343,7 +343,10 @@ def campaigns(
         table.add_column("Premium $", justify="right")
         table.add_column("Score máx", justify="right")
         table.add_column("Convicción")
+        table.add_column("Outcome")
         for c in camps:
+            oc = c.get("outcome_hit")
+            oc_str = "—" if oc is None else ("HIT" if oc else "MISS")
             table.add_row(
                 str(c["contract"]),
                 str(c["call_put"]),
@@ -352,8 +355,24 @@ def campaigns(
                 f"{c['total_premium']:,.0f}",
                 f"{(c['max_score'] or 0):.2f}",
                 str(c["conviction"]),
+                oc_str,
             )
         console.print(table)
+        # Campaign outcomes hit-rate (closed with resolved outcome)
+        rows = conn.execute(
+            """
+            SELECT outcome_hit FROM campaigns
+            WHERE outcome_hit IS NOT NULL
+              AND (? = 'MU' OR underlying = ?)
+            """,
+            (underlying.upper(), underlying.upper()),
+        ).fetchall()
+        if rows:
+            hits = sum(int(r["outcome_hit"]) for r in rows)
+            console.print(
+                f"[dim]Campañas resueltas: {hits}/{len(rows)} "
+                f"({hits / len(rows):.0%} hit-rate)[/dim]"
+            )
     finally:
         conn.close()
 

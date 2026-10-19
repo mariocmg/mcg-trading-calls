@@ -78,6 +78,28 @@ def walk_forward(
     combos = agg([i for i in items if i.get("combo_type")])
     oi_up = agg([i for i in items if (i.get("outcome_oi_growth") or 0) > 0.1])
 
+    # Campaign-level outcomes: did the desk's accumulation work?
+    camp_rows = conn.execute(
+        """
+        SELECT total_premium, n_prints, outcome_hit, outcome_return
+        FROM campaigns
+        WHERE outcome_hit IS NOT NULL
+        """ + ("AND underlying = ?" if underlying else ""),
+        ([underlying.upper()] if underlying else []),
+    ).fetchall()
+    camp_items = [dict(r) for r in camp_rows]
+    campaigns_rep = None
+    if camp_items:
+        hits = sum(int(c["outcome_hit"]) for c in camp_items)
+        campaigns_rep = {
+            "n": len(camp_items),
+            "hit_rate": round(hits / len(camp_items), 3),
+            "avg_return": round(
+                float(sum(float(c["outcome_return"] or 0) for c in camp_items)
+                      / len(camp_items)), 4),
+            "total_premium": round(sum(float(c["total_premium"] or 0) for c in camp_items), 0),
+        }
+
     return {
         "n": n,
         "overall": agg(items),
@@ -87,6 +109,7 @@ def walk_forward(
         "blocks": blocks,
         "with_combo": combos,
         "oi_grew": oi_up,
+        "campaigns": campaigns_rep,
     }
 
 
@@ -169,6 +192,12 @@ def format_report(rep: dict[str, Any]) -> str:
         lines.append(f"Con combo: {rep['with_combo']['hit_rate']:.1%} (n={rep['with_combo']['n']})")
     if rep["oi_grew"]["n"]:
         lines.append(f"OI creció >10%: {rep['oi_grew']['hit_rate']:.1%} (n={rep['oi_grew']['n']})")
+    if rep.get("campaigns"):
+        c = rep["campaigns"]
+        lines.append(
+            f"\nCampañas: {c['hit_rate']:.1%} hit-rate, ret medio {c['avg_return']:+.2%} "
+            f"(n={c['n']}, prima total ${c['total_premium']:,.0f})"
+        )
     if rep["monthly"]:
         lines.append("\nPor mes:")
         for m in rep["monthly"][-6:]:

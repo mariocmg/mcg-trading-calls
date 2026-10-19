@@ -156,12 +156,28 @@ def _migrate(conn: sqlite3.Connection) -> None:
     snap_cols = {r[1] for r in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
     if "gamma" not in snap_cols:
         conn.execute("ALTER TABLE snapshots ADD COLUMN gamma REAL")
+    # inst_memory: timestamp for exponential decay
+    mem_cols = {r[1] for r in conn.execute("PRAGMA table_info(inst_memory)").fetchall()}
+    if mem_cols and "updated_at" not in mem_cols:
+        conn.execute("ALTER TABLE inst_memory ADD COLUMN updated_at TEXT")
+    # campaigns: entry spot + outcome (did the desk's campaign work?)
+    camp_cols = {r[1] for r in conn.execute("PRAGMA table_info(campaigns)").fetchall()}
+    if camp_cols:
+        for col, typ in (
+            ("entry_spot", "REAL"),
+            ("outcome_hit", "INTEGER"),
+            ("outcome_return", "REAL"),
+            ("outcome_at", "TEXT"),
+        ):
+            if col not in camp_cols:
+                conn.execute(f"ALTER TABLE campaigns ADD COLUMN {col} {typ}")
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS inst_memory (
             bucket TEXT PRIMARY KEY,
             hits INTEGER NOT NULL DEFAULT 0,
-            n INTEGER NOT NULL DEFAULT 0
+            n INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT
         );
         CREATE TABLE IF NOT EXISTS strike_levels (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -193,11 +209,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
             started_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             last_scan_id INTEGER,
+            entry_spot REAL,
             n_prints INTEGER NOT NULL DEFAULT 0,
             total_premium REAL NOT NULL DEFAULT 0,
             total_delta_volume INTEGER NOT NULL DEFAULT 0,
             avg_score REAL,
-            max_score REAL
+            max_score REAL,
+            outcome_hit INTEGER,
+            outcome_return REAL,
+            outcome_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_campaigns_contract
             ON campaigns(contract, status);
@@ -713,14 +733,14 @@ def create_campaign(conn: sqlite3.Connection, alert: dict[str, Any]) -> int:
         """
         INSERT INTO campaigns (
             underlying, contract, call_put, strike, expiry, direction,
-            status, started_at, updated_at, last_scan_id,
+            status, started_at, updated_at, last_scan_id, entry_spot,
             n_prints, total_premium, total_delta_volume, avg_score, max_score
-        ) VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, 1, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, 1, ?, ?, ?, ?)
         """,
         (
             alert.get("underlying"), alert.get("contract"), alert.get("call_put"),
             alert.get("strike"), alert.get("expiry"), direction,
-            now, now, alert.get("scan_id"),
+            now, now, alert.get("scan_id"), alert.get("spot"),
             float(alert.get("premium_usd") or 0), int(alert.get("delta_volume") or 0),
             alert.get("inst_score"), alert.get("inst_score"),
         ),

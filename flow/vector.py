@@ -387,7 +387,7 @@ def compute_vector(
     """
     und = underlying.upper()
     scoped = [a for a in alerts if str(a.get("underlying", "")).upper() == und]
-    analysis = analyze_alerts(scoped, und)
+    analysis = analyze_alerts(scoped, und, conn=conn)
     feats = extract_features(scoped)
     ohlc = _fetch_ohlc(und)
 

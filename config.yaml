@@ -26,5 +26,8 @@ heuristics:
     min_premium_usd: 20000
     min_percentile: 0.82
     cluster_percentile: 0.68
+  # Outcome memory: exponential decay half-life in days (old regimes fade)
+  memory:
+    half_life_days: 30
 
 database: data/flow.db

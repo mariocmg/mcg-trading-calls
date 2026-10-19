@@ -65,13 +65,87 @@ def _thesis_hit(bearish: bool, adj_ret: float, min_move: float) -> int:
     return 1 if adj_ret > 0 else 0
 
 
-def resolve_outcomes(conn: sqlite3.Connection, spots: dict[str, float]) -> int:
+def label_follow_through(
+    underlying: str,
+    entry_spot: float,
+    entry_ts: datetime,
+    spot_now: float,
+    bearish: bool,
+    atr_cache: dict[str, float | None] | None = None,
+) -> tuple[int, float, float]:
+    """Shared labeling: ATR floor + SPY beta adjustment.
+
+    Returns (hit, raw_return, adj_return). Used by alert outcomes and by
+    campaign outcomes so both measure edge the same way.
+    """
+    und = underlying.upper()
+    raw_ret = spot_now / entry_spot - 1.0
+    if atr_cache is None:
+        atr_cache = {}
+    if und not in atr_cache:
+        try:
+            atr_cache[und] = get_atr_pct(und)
+        except Exception:  # noqa: BLE001 - best effort
+            atr_cache[und] = None
+    atr_pct = atr_cache[und]
+    min_move = 0.5 * atr_pct if atr_pct else 0.004
+    adj_ret = raw_ret
+    try:
+        spy_ret = spy_return_between(entry_ts.date().isoformat(),
+                                     datetime.now(timezone.utc).date().isoformat())
+        if spy_ret is not None:
+            adj_ret = raw_ret - spy_ret  # beta ≈ 1
+    except Exception:  # noqa: BLE001 - best effort
+        pass
+    return _thesis_hit(bearish, adj_ret, min_move), raw_ret, adj_ret
+
+
+def decay_memory(conn: sqlite3.Connection, half_life_days: float = 30.0) -> None:
+    """Exponential decay on the outcome memory (default 30-day half-life).
+
+    Old regimes shouldn't steer today's scores forever: every bucket's
+    (hits, n) decays by 0.5 ** (days_since_update / half_life).
+    """
+    if half_life_days <= 0:
+        return
+    now = datetime.now(timezone.utc)
+    rows = conn.execute("SELECT bucket, hits, n, updated_at FROM inst_memory").fetchall()
+    for r in rows:
+        ts = _parse_ts(r["updated_at"]) if "updated_at" in r.keys() else None
+        if ts is None:
+            # legacy rows without timestamp: stamp them now, don't decay yet
+            conn.execute(
+                "UPDATE inst_memory SET updated_at = ? WHERE bucket = ?",
+                (now.isoformat(), r["bucket"]),
+            )
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_days = max(0.0, (now - ts).total_seconds() / 86400.0)
+        if age_days < 1.0:
+            continue
+        factor = 0.5 ** (age_days / half_life_days)
+        conn.execute(
+            "UPDATE inst_memory SET hits = ?, n = ?, updated_at = ? WHERE bucket = ?",
+            (round(float(r["hits"]) * factor, 2), round(float(r["n"]) * factor, 2),
+             now.isoformat(), r["bucket"]),
+        )
+    conn.commit()
+
+
+def resolve_outcomes(
+    conn: sqlite3.Connection,
+    spots: dict[str, float],
+    half_life_days: float = 30.0,
+) -> int:
     """
     Resolve alerts whose DTE-appropriate horizon has elapsed: ATR-normalized,
     SPY-adjusted follow-through plus OI persistence. Updates inst_memory so
     similar prints score higher or lower next time.
     """
     from flow.db import latest_oi_map
+
+    decay_memory(conn, half_life_days=half_life_days)
 
     now = datetime.now(timezone.utc)
     rows = conn.execute(
@@ -106,28 +180,10 @@ def resolve_outcomes(conn: sqlite3.Connection, spots: dict[str, float]) -> int:
         if spot_now <= 0 or entry <= 0:
             continue
 
-        raw_ret = spot_now / entry - 1.0
-
-        # ATR noise floor (0.5× ATR); fallback to the old 0.4% if unavailable.
-        if und not in atr_cache:
-            try:
-                atr_cache[und] = get_atr_pct(und)
-            except Exception:  # noqa: BLE001 - best effort
-                atr_cache[und] = None
-        atr_pct = atr_cache[und]
-        min_move = 0.5 * atr_pct if atr_pct else 0.004
-
-        # Beta adjustment vs SPY over the same window.
-        adj_ret = raw_ret
-        try:
-            spy_ret = spy_return_between(ts.date().isoformat(), now.date().isoformat())
-            if spy_ret is not None:
-                adj_ret = raw_ret - spy_ret  # beta ≈ 1
-        except Exception:  # noqa: BLE001 - best effort
-            pass
-
         bearish = r["call_put"] == "P" or r["inst_label"] == "HEDGE"
-        hit = _thesis_hit(bearish, adj_ret, min_move)
+        hit, raw_ret, adj_ret = label_follow_through(
+            und, entry, ts, spot_now, bearish, atr_cache
+        )
 
         # OI persistence: is the position still being built?
         oi_growth = None
@@ -159,12 +215,13 @@ def resolve_outcomes(conn: sqlite3.Connection, spots: dict[str, float]) -> int:
         )
         conn.execute(
             """
-            INSERT INTO inst_memory (bucket, hits, n) VALUES (?, ?, 1)
+            INSERT INTO inst_memory (bucket, hits, n, updated_at) VALUES (?, ?, 1, ?)
             ON CONFLICT(bucket) DO UPDATE SET
                 hits = hits + excluded.hits,
-                n = n + 1
+                n = n + 1,
+                updated_at = excluded.updated_at
             """,
-            (key, hit),
+            (key, hit, now.isoformat()),
         )
         n += 1
     if n:
