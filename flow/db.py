@@ -1,0 +1,470 @@
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS scans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scanned_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL REFERENCES scans(id),
+    underlying TEXT NOT NULL,
+    expiry TEXT NOT NULL,
+    contract TEXT NOT NULL,
+    call_put TEXT NOT NULL,
+    strike REAL NOT NULL,
+    last REAL,
+    bid REAL,
+    ask REAL,
+    volume INTEGER,
+    open_interest INTEGER,
+    implied_volatility REAL,
+    dte INTEGER,
+    UNIQUE(scan_id, contract)
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshots_scan ON snapshots(scan_id);
+CREATE INDEX IF NOT EXISTS idx_snapshots_contract ON snapshots(contract);
+CREATE INDEX IF NOT EXISTS idx_snapshots_underlying ON snapshots(underlying);
+
+CREATE TABLE IF NOT EXISTS alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id INTEGER NOT NULL REFERENCES scans(id),
+    created_at TEXT NOT NULL,
+    event_at TEXT,
+    underlying TEXT NOT NULL,
+    contract TEXT NOT NULL,
+    call_put TEXT NOT NULL,
+    strike REAL NOT NULL,
+    expiry TEXT NOT NULL,
+    dte INTEGER,
+    price REAL,
+    volume INTEGER,
+    open_interest INTEGER,
+    delta_volume INTEGER,
+    premium_usd REAL,
+    vol_oi_ratio REAL,
+    reason TEXT NOT NULL,
+    side_bias TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_alerts_underlying ON alerts(underlying);
+CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_event_at ON alerts(event_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_scan ON alerts(scan_id);
+CREATE INDEX IF NOT EXISTS idx_alerts_outcome ON alerts(outcome_hit);
+"""
+
+_INITIALIZED_DBS: set[str] = set()
+
+
+def connect(db_path: Path) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    
+    path_key = str(db_path.resolve())
+    if path_key not in _INITIALIZED_DBS:
+        init_db(conn)
+        _INITIALIZED_DBS.add(path_key)
+    return conn
+
+
+def init_db(conn: sqlite3.Connection) -> None:
+    conn.executescript(SCHEMA)
+    _migrate(conn)
+    _ensure_indexes(conn)
+
+
+def _ensure_indexes(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_alerts_underlying ON alerts(underlying);
+        CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at);
+        CREATE INDEX IF NOT EXISTS idx_alerts_event_at ON alerts(event_at);
+        CREATE INDEX IF NOT EXISTS idx_alerts_scan ON alerts(scan_id);
+        CREATE INDEX IF NOT EXISTS idx_alerts_outcome ON alerts(outcome_hit);
+        CREATE INDEX IF NOT EXISTS idx_alerts_inst_label ON alerts(inst_label);
+        """
+    )
+    conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(alerts)").fetchall()}
+    if "spot" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN spot REAL")
+    if "otm_pct" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN otm_pct REAL")
+    if "event_at" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN event_at TEXT")
+    if "inst_score" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN inst_score REAL")
+    if "inst_label" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN inst_label TEXT")
+    if "inst_reason" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN inst_reason TEXT")
+    if "cluster_n" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN cluster_n INTEGER")
+    if "outcome_hit" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN outcome_hit INTEGER")
+    if "outcome_return" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN outcome_return REAL")
+    if "outcome_at" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN outcome_at TEXT")
+    if "opening" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN opening INTEGER")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS inst_memory (
+            bucket TEXT PRIMARY KEY,
+            hits INTEGER NOT NULL DEFAULT 0,
+            n INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS positioning (
+            underlying TEXT PRIMARY KEY,
+            updated_at TEXT NOT NULL,
+            call_premium REAL,
+            put_premium REAL,
+            net_premium REAL,
+            gex_ok INTEGER,
+            gex_strike REAL,
+            gex_value REAL,
+            gex_side TEXT,
+            call_avg_strike REAL,
+            put_avg_strike REAL,
+            avg_strike REAL
+        );
+        """
+    )
+    pos_cols = {r[1] for r in conn.execute("PRAGMA table_info(positioning)").fetchall()}
+    if pos_cols:
+        if "call_avg_strike" not in pos_cols:
+            conn.execute("ALTER TABLE positioning ADD COLUMN call_avg_strike REAL")
+        if "put_avg_strike" not in pos_cols:
+            conn.execute("ALTER TABLE positioning ADD COLUMN put_avg_strike REAL")
+        if "avg_strike" not in pos_cols:
+            conn.execute("ALTER TABLE positioning ADD COLUMN avg_strike REAL")
+    conn.commit()
+
+
+def run_maintenance(conn: sqlite3.Connection, keep_snapshot_days: int = 14) -> dict[str, int]:
+    """Startup maintenance: clean off-hours noise and prune older snapshots."""
+    purged_hours = purge_off_hours_alerts(conn)
+    purged_non_inst = purge_non_institutional(conn)
+    pruned_snaps = cleanup_old_snapshots(conn, keep_days=keep_snapshot_days)
+    return {
+        "purged_off_hours": purged_hours,
+        "purged_non_institutional": purged_non_inst,
+        "pruned_snapshots": pruned_snaps,
+    }
+
+
+def cleanup_old_snapshots(conn: sqlite3.Connection, keep_days: int = 14) -> int:
+    """Prune snapshots older than keep_days to control database growth."""
+    cur = conn.execute(
+        """
+        DELETE FROM snapshots
+        WHERE scan_id IN (
+            SELECT id FROM scans WHERE scanned_at < datetime('now', ?)
+        )
+        """,
+        (f"-{int(keep_days)} days",),
+    )
+    conn.commit()
+    # Prune unreferenced scans
+    conn.execute(
+        """
+        DELETE FROM scans
+        WHERE scanned_at < datetime('now', ?)
+          AND id NOT IN (SELECT DISTINCT scan_id FROM alerts)
+        """,
+        (f"-{int(keep_days)} days",),
+    )
+    conn.commit()
+    return int(cur.rowcount or 0)
+
+
+def purge_off_hours_alerts(conn: sqlite3.Connection) -> int:
+    """Remove tape rows whose trade/scan time falls outside RTH."""
+    from flow.market_hours import is_rth_timestamp
+
+    rows = conn.execute("SELECT id, event_at, created_at FROM alerts").fetchall()
+    drop: list[int] = []
+    for r in rows:
+        stamp = r["event_at"] or r["created_at"]
+        if not is_rth_timestamp(stamp):
+            drop.append(int(r["id"]))
+    if not drop:
+        return 0
+    conn.executemany("DELETE FROM alerts WHERE id = ?", [(i,) for i in drop])
+    conn.commit()
+    return len(drop)
+
+
+def purge_non_institutional(conn: sqlite3.Connection) -> int:
+    """Drop legacy tape rows that never passed the AI institutional gate."""
+    cur = conn.execute(
+        """
+        DELETE FROM alerts
+        WHERE inst_score IS NULL
+           OR inst_label IS NULL
+           OR inst_label NOT IN ('INSTITUTIONAL', 'HEDGE')
+        """
+    )
+    conn.commit()
+    return int(cur.rowcount or 0)
+
+
+def save_positioning(conn: sqlite3.Connection, summary: dict[str, Any]) -> None:
+    gex = summary.get("gex") or {}
+    conn.execute(
+        """
+        INSERT INTO positioning (
+            underlying, updated_at, call_premium, put_premium, net_premium,
+            gex_ok, gex_strike, gex_value, gex_side,
+            call_avg_strike, put_avg_strike, avg_strike
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(underlying) DO UPDATE SET
+            updated_at = excluded.updated_at,
+            call_premium = excluded.call_premium,
+            put_premium = excluded.put_premium,
+            net_premium = excluded.net_premium,
+            gex_ok = excluded.gex_ok,
+            gex_strike = excluded.gex_strike,
+            gex_value = excluded.gex_value,
+            gex_side = excluded.gex_side,
+            call_avg_strike = excluded.call_avg_strike,
+            put_avg_strike = excluded.put_avg_strike,
+            avg_strike = excluded.avg_strike
+        """,
+        (
+            summary["underlying"],
+            datetime.now(timezone.utc).isoformat(),
+            summary.get("call_premium"),
+            summary.get("put_premium"),
+            summary.get("net_premium"),
+            1 if gex.get("ok") else 0,
+            gex.get("strike"),
+            gex.get("gex"),
+            gex.get("side"),
+            summary.get("call_avg_strike"),
+            summary.get("put_avg_strike"),
+            summary.get("avg_strike"),
+        ),
+    )
+    conn.commit()
+
+
+def load_positioning(conn: sqlite3.Connection, underlying: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT * FROM positioning WHERE underlying = ?",
+        (underlying.upper(),),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def start_scan(conn: sqlite3.Connection) -> int:
+    now = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute("INSERT INTO scans (scanned_at) VALUES (?)", (now,))
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def insert_snapshots(
+    conn: sqlite3.Connection, scan_id: int, rows: Iterable[dict[str, Any]]
+) -> int:
+    payload = [
+        (
+            scan_id,
+            r["underlying"],
+            r["expiry"],
+            r["contract"],
+            r["call_put"],
+            r["strike"],
+            r.get("last"),
+            r.get("bid"),
+            r.get("ask"),
+            r.get("volume"),
+            r.get("open_interest"),
+            r.get("implied_volatility"),
+            r.get("dte"),
+        )
+        for r in rows
+    ]
+    conn.executemany(
+        """
+        INSERT OR REPLACE INTO snapshots (
+            scan_id, underlying, expiry, contract, call_put, strike,
+            last, bid, ask, volume, open_interest, implied_volatility, dte
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        payload,
+    )
+    conn.commit()
+    return len(payload)
+
+
+def insert_alerts(conn: sqlite3.Connection, alerts: Iterable[dict[str, Any]]) -> int:
+    now = datetime.now(timezone.utc).isoformat()
+    payload = [
+        (
+            a["scan_id"],
+            now,
+            a.get("event_at") or now,
+            a["underlying"],
+            a["contract"],
+            a["call_put"],
+            a["strike"],
+            a["expiry"],
+            a.get("dte"),
+            a.get("price"),
+            a.get("volume"),
+            a.get("open_interest"),
+            a.get("delta_volume"),
+            a.get("premium_usd"),
+            a.get("vol_oi_ratio"),
+            a["reason"],
+            a.get("side_bias"),
+            a.get("spot"),
+            a.get("otm_pct"),
+            a.get("inst_score"),
+            a.get("inst_label"),
+            a.get("inst_reason"),
+            a.get("cluster_n"),
+            a.get("opening"),
+        )
+        for a in alerts
+    ]
+    if not payload:
+        return 0
+    conn.executemany(
+        """
+        INSERT INTO alerts (
+            scan_id, created_at, event_at, underlying, contract, call_put, strike, expiry,
+            dte, price, volume, open_interest, delta_volume, premium_usd,
+            vol_oi_ratio, reason, side_bias, spot, otm_pct,
+            inst_score, inst_label, inst_reason, cluster_n, opening
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        payload,
+    )
+    conn.commit()
+    return len(payload)
+
+
+def previous_scan_id(conn: sqlite3.Connection, current_scan_id: int) -> int | None:
+    row = conn.execute(
+        "SELECT id FROM scans WHERE id < ? ORDER BY id DESC LIMIT 1",
+        (current_scan_id,),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def load_snapshot_map(conn: sqlite3.Connection, scan_id: int) -> dict[str, sqlite3.Row]:
+    rows = conn.execute(
+        "SELECT * FROM snapshots WHERE scan_id = ?", (scan_id,)
+    ).fetchall()
+    return {r["contract"]: r for r in rows}
+
+
+def recent_alerts(
+    conn: sqlite3.Connection,
+    limit: int = 50,
+    underlying: str | None = None,
+    call_put: str | None = None,
+    days: int | None = None,
+) -> list[sqlite3.Row]:
+    from flow.market_hours import is_rth_timestamp
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if underlying:
+        clauses.append("underlying = ?")
+        params.append(underlying.upper())
+    if call_put:
+        clauses.append("call_put = ?")
+        params.append(call_put.upper())
+    if days is not None:
+        clauses.append("COALESCE(event_at, created_at) >= datetime('now', ?)")
+        params.append(f"-{int(days)} days")
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    # Over-fetch then keep only RTH + AI-institutional stamps.
+    fetch_n = max(limit * 5, 250)
+    params.append(fetch_n)
+    rows = conn.execute(
+        f"SELECT * FROM alerts {where} ORDER BY id DESC LIMIT ?",
+        params,
+    ).fetchall()
+    out: list[sqlite3.Row] = []
+    for r in rows:
+        stamp = r["event_at"] or r["created_at"]
+        if not is_rth_timestamp(stamp):
+            continue
+        label = r["inst_label"] if "inst_label" in r.keys() else None
+        score = r["inst_score"] if "inst_score" in r.keys() else None
+        if label not in ("INSTITUTIONAL", "HEDGE"):
+            continue
+        if score is None or float(score) < 0.5:
+            continue
+        out.append(r)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def weekly_summary(conn: sqlite3.Connection, days: int = 7) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT
+            underlying,
+            call_put,
+            COUNT(*) AS alert_count,
+            COALESCE(SUM(premium_usd), 0) AS total_premium,
+            COALESCE(SUM(delta_volume), 0) AS total_delta_volume
+        FROM alerts
+        WHERE created_at >= datetime('now', ?)
+        GROUP BY underlying, call_put
+        ORDER BY underlying, call_put
+        """,
+        (f"-{days} days",),
+    ).fetchall()
+
+
+def latest_scan_info(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT id, scanned_at FROM scans ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+
+
+def scan_count(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COUNT(*) AS n FROM scans").fetchone()
+    return int(row["n"]) if row else 0
+
+
+def alert_count(conn: sqlite3.Connection, days: int | None = None) -> int:
+    if days is None:
+        row = conn.execute("SELECT COUNT(*) AS n FROM alerts").fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM alerts WHERE created_at >= datetime('now', ?)",
+            (f"-{int(days)} days",),
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def list_underlyings(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute(
+        "SELECT DISTINCT underlying FROM alerts ORDER BY underlying"
+    ).fetchall()
+    return [r["underlying"] for r in rows]

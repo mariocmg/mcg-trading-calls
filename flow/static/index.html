@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FLOW · MU</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=8" />
+</head>
+<body>
+  <header class="chrome-bar">
+    <div class="chrome" aria-label="Estado">
+      <span id="live-dot" class="dot off"></span>
+      <span id="status" class="status">conectando…</span>
+      <button type="button" id="btn-live" class="btn text on">LIVE</button>
+      <button type="button" id="btn-scan" class="btn">Actualizar</button>
+    </div>
+  </header>
+
+  <div class="app">
+    <section class="signal">
+      <div class="signal-top">
+        <div class="sym-block">
+          <label class="mini">Ticker</label>
+          <select id="f-und" class="sym-select">
+            <option value="MU" selected>MU</option>
+            <option value="">ALL</option>
+          </select>
+          <div id="vec-status" class="status-chip warn">DEGRADED</div>
+        </div>
+        <button type="button" id="btn-howto" class="linkish">¿Cómo se calcula?</button>
+      </div>
+
+      <div id="vector-row" class="signal-body">
+        <div class="dir-block">
+          <div id="v-dir" class="dir">—</div>
+          <div id="v-state-title" class="state-main">—</div>
+          <p id="v-state-detail" class="state-sub">—</p>
+          <span id="v-state-badge" class="pill">—</span>
+        </div>
+
+        <div class="stats">
+          <div class="stat">
+            <span class="mini">Etapa</span>
+            <div class="stage-track" id="v-stage-track"><i></i><i></i><i></i></div>
+            <strong id="v-stage-label">—</strong>
+          </div>
+          <div class="stat">
+            <span class="mini">Confianza</span>
+            <strong id="v-conf-num" class="conf">—</strong>
+            <div class="conf-bar"><i id="v-conf-bar"></i></div>
+            <span id="v-conf-label" class="mini">—</span>
+          </div>
+          <div class="stat">
+            <span class="mini">Precio</span>
+            <strong id="v-price" class="num">—</strong>
+          </div>
+          <div class="stat">
+            <span class="mini">Invalidación</span>
+            <strong class="num inv">
+              <span id="v-inv-price">—</span>
+              <span id="v-inv-arrow" class="inv-arrow"></span>
+            </strong>
+          </div>
+        </div>
+      </div>
+
+      <p id="vec-updated" class="updated">LAST UPDATED —</p>
+      <span id="v-sym" class="sr-only">MU</span>
+    </section>
+
+    <section class="book" id="book">
+      <div>
+        <span class="mini">Premium sesión</span>
+        <strong id="book-net">—</strong>
+        <span id="book-split" class="mini">calls — · puts —</span>
+      </div>
+      <div>
+        <span class="mini">Precio medio</span>
+        <strong id="book-avg">—</strong>
+        <span id="book-avg-split" class="mini">calls — · puts —</span>
+      </div>
+      <div>
+        <span class="mini">Gamma neta</span>
+        <strong id="book-gex">—</strong>
+        <span class="mini">calls + · puts −</span>
+      </div>
+    </section>
+
+    <section class="tape-wrap">
+      <div class="tape-head">
+        <div>
+          <h2>Calls / Puts institucionales</h2>
+          <p class="hint">Solo flujo que la IA marca como desk / hedge (no retail)</p>
+        </div>
+        <span id="feed-count" class="count">0</span>
+      </div>
+
+      <div class="filters" id="filters">
+        <label>
+          <span>Lado</span>
+          <select id="f-side">
+            <option value="">Todos</option>
+            <option value="C">Calls</option>
+            <option value="P">Puts</option>
+          </select>
+        </label>
+        <label>
+          <span>DTE</span>
+          <select id="f-dte">
+            <option value="">Cualquiera</option>
+            <option value="7">≤ 7</option>
+            <option value="14">≤ 14</option>
+            <option value="30">≤ 30</option>
+            <option value="45">≤ 45</option>
+          </select>
+        </label>
+        <label>
+          <span>OTM</span>
+          <select id="f-otm">
+            <option value="">Cualquiera</option>
+            <option value="0">Solo OTM</option>
+            <option value="5">≥ 5%</option>
+            <option value="10">≥ 10%</option>
+          </select>
+        </label>
+        <label>
+          <span>Premium mín.</span>
+          <select id="f-prem">
+            <option value="0">Cualquiera</option>
+            <option value="50000">$50K</option>
+            <option value="100000">$100K</option>
+            <option value="250000">$250K</option>
+            <option value="500000">$500K</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="tape">
+        <div class="tape-cols" aria-hidden="true">
+          <span>Hora</span>
+          <span>Ticker</span>
+          <span>Strike</span>
+          <span>C/P</span>
+          <span>OTM</span>
+          <span>IA</span>
+          <span>DTE</span>
+          <span>Premium</span>
+        </div>
+        <div id="feed" class="feed"></div>
+      </div>
+    </section>
+  </div>
+
+  <dialog id="howto-modal" class="modal">
+    <form method="dialog" class="modal-card">
+      <h3>Cómo se calcula</h3>
+      <ul>
+        <li><strong>Score</strong> — vol/OI, urgencia (DTE + OTM), repetición de strikes y lado en el ask. Si falta un dato, no entra y el peso se reparte. Volumen &gt; open interest = apertura.</li>
+        <li><strong>Precio medio</strong> — strike ponderado por premium de la sesión: a qué nivel se posicionan calls y puts.</li>
+        <li><strong>Dirección</strong> — residual del flow institucional (tras descontar hedges) + confirmación de precio. Sin tape RTH → Sin señal.</li>
+        <li><strong>Etapa</strong> — Early → Building → Confirmed según alineación flow, precio y persistencia.</li>
+        <li><strong>Confianza</strong> — mezcla de esos scores; mucho hedge baja la convicción.</li>
+        <li><strong>Invalidación</strong> — swing 10d ± 1.5×ATR.</li>
+      </ul>
+      <button type="submit" class="btn solid">Entendido</button>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js?v=8"></script>
+</body>
+</html>
