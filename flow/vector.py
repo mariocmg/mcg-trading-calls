@@ -20,6 +20,12 @@ import numpy as np
 
 from flow.ml_positioning import analyze_alerts, extract_features, _safe, _prem
 
+#: Confidence is clamped to [CONF_FLOOR, 96.5]. Be aware: with delayed chains
+#: and a heuristic score, anything in the 52-65 ("LOW") band is essentially a
+#: coin flip — size positions accordingly, don't treat it as an edge.
+CONF_FLOOR = 52.0
+CONF_CAP = 96.5
+
 
 def _fetch_ohlc(symbol: str, period: str = "3mo") -> dict[str, Any]:
     """Recent OHLC for trend / ATR. Best-effort; empty if unavailable."""
@@ -329,7 +335,7 @@ def compute_vector(
                 - 18.0 * hedge
                 - 8.0 * mixed
             )
-            conf = float(max(52.0, min(96.5, conf)))
+            conf = float(max(CONF_FLOOR, min(CONF_CAP, conf)))
             conf_label = "HIGH" if conf >= 78 else ("MEDIUM" if conf >= 65 else "LOW")
             degraded = (not ohlc.get("ok")) or n_alerts < 12 or hedge >= 0.55
 
@@ -355,6 +361,11 @@ def compute_vector(
         "stage_n": stage_n,
         "confidence": round(conf, 1) if direction != "NEUTRAL" or not no_flow else (0 if no_flow else round(conf, 1)),
         "confidence_label": conf_label,
+        "confidence_note": (
+            "LOW (52-65) ≈ coin flip on delayed data — not an edge"
+            if direction != "NEUTRAL" and conf_label == "LOW"
+            else None
+        ),
         "state": state,
         "price": price_out,
         "invalidation": inv,

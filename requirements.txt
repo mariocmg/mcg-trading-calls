@@ -1,9 +1,12 @@
-yfinance>=0.2.40
-pandas>=2.2.0
-rich>=13.7.0
-typer>=0.12.0
-pyyaml>=6.0.0
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-scikit-learn>=1.5.0
-numpy>=1.26.0
+# Pinned 2026-10-19 (resolved together with pip; Python 3.13 target).
+yfinance==1.7.0
+pandas==3.0.6
+rich==15.0.0
+typer==0.27.3
+pyyaml==6.0.3
+fastapi==0.148.0
+uvicorn[standard]==0.54.0
+scikit-learn==1.9.1
+numpy==2.5.4
+joblib==1.6.0
+pytest==9.1.1

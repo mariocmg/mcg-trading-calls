@@ -63,10 +63,25 @@ function fillUnderlyings(list) {
   const sel = $("#f-und");
   const cur = sel.value || "MU";
   const set = new Set(["MU", ...list]);
-  sel.innerHTML =
-    `<option value="">ALL</option>` +
-    [...set].sort().map((u) => `<option value="${u}">${u}</option>`).join("");
+  sel.textContent = "";
+  const all = document.createElement("option");
+  all.value = "";
+  all.textContent = "ALL";
+  sel.appendChild(all);
+  for (const u of [...set].sort()) {
+    const opt = document.createElement("option");
+    opt.value = u;
+    opt.textContent = u;
+    sel.appendChild(opt);
+  }
   sel.value = [...sel.options].some((o) => o.value === cur) ? cur : "MU";
+}
+
+function span(cls, text) {
+  const el = document.createElement("span");
+  if (cls) el.className = cls;
+  el.textContent = text;
+  return el;
 }
 
 function renderFeed() {
@@ -77,33 +92,32 @@ function renderFeed() {
     .sort((a, b) => b.id - a.id)
     .slice(0, 150);
 
-  feed.innerHTML = "";
+  feed.textContent = "";
   $("#feed-count").textContent = `${rows.length}`;
 
   if (!rows.length) {
-    feed.innerHTML = `<div class="empty">${
-      alerts.size ? "Sin coincidencias" : "Esperando flujo…"
-    }</div>`;
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = alerts.size ? "Sin coincidencias" : "Esperando flujo…";
+    feed.appendChild(empty);
     return;
   }
 
   for (const a of rows) {
     const row = document.createElement("div");
     row.className = "row" + (freshIds.has(a.id) ? " fresh" : "");
-    row.innerHTML = `
-      <span class="time">${fmtTime(a.event_at || a.created_at)}</span>
-      <span class="sym">${a.underlying}</span>
-      <span>${Number(a.strike).toFixed(0)}</span>
-      <span class="cp ${a.call_put}">${a.call_put}</span>
-      <span class="otm">${otmLabel(a)}</span>
-      <span class="ia ${a.inst_label === "HEDGE" ? "hedge" : "inst"}">${
-        a.inst_score != null
-          ? `${a.inst_label === "HEDGE" ? "HDG" : "INST"} ${Math.round(Number(a.inst_score) * 100)}${Number(a.opening) ? " · OPEN" : ""}`
-          : "—"
-      }</span>
-      <span>${a.dte ?? "—"}</span>
-      <span class="prem">${money(a.premium_usd)}</span>
-    `;
+    row.appendChild(span("time", fmtTime(a.event_at || a.created_at)));
+    row.appendChild(span("sym", String(a.underlying ?? "")));
+    row.appendChild(span("", Number(a.strike).toFixed(0)));
+    row.appendChild(span(`cp ${a.call_put}`, String(a.call_put ?? "")));
+    row.appendChild(span("otm", otmLabel(a)));
+    const ia =
+      a.inst_score != null
+        ? `${a.inst_label === "HEDGE" ? "HDG" : "INST"} ${Math.round(Number(a.inst_score) * 100)}${Number(a.opening) ? " · OPEN" : ""}`
+        : "—";
+    row.appendChild(span(`ia ${a.inst_label === "HEDGE" ? "hedge" : "inst"}`, ia));
+    row.appendChild(span("", a.dte == null ? "—" : String(a.dte)));
+    row.appendChild(span("prem", money(a.premium_usd)));
     feed.appendChild(row);
   }
 }
@@ -229,17 +243,25 @@ async function loadBook(und) {
     : "sin gamma (cadena sin greek)";
 }
 
+let refreshing = false;
+
 async function refreshAll() {
-  const s = await api("/api/status");
-  live = !!s.live;
-  $("#btn-live").classList.toggle("on", live);
-  const mkt = s.market || {};
-  if (s.scan_running) setStatus("escaneando…", "scan");
-  else if (!mkt.open && live) setStatus("mercado cerrado · sin auto-scan", "off");
-  else if (live) setStatus(`en vivo · ${s.interval}s`, "on");
-  else setStatus("pausado", "off");
-  await loadNewAlerts();
-  await loadVector();
+  if (refreshing) return; // skip overlapping refreshes (interval + SSE can collide)
+  refreshing = true;
+  try {
+    const s = await api("/api/status");
+    live = !!s.live;
+    $("#btn-live").classList.toggle("on", live);
+    const mkt = s.market || {};
+    if (s.scan_running) setStatus("escaneando…", "scan");
+    else if (!mkt.open && live) setStatus("mercado cerrado · sin auto-scan", "off");
+    else if (live) setStatus(`en vivo · ${s.interval}s`, "on");
+    else setStatus("pausado", "off");
+    await loadNewAlerts();
+    await loadVector();
+  } finally {
+    refreshing = false;
+  }
 }
 
 function connectLive() {

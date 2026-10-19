@@ -4,9 +4,32 @@ cd /d "%~dp0"
 title FLOW
 
 if not exist ".venv\Scripts\python.exe" (
-  echo No esta el entorno .venv en esta carpeta.
-  pause
-  exit /b 1
+  echo Creando entorno virtual .venv...
+  where py >nul 2>&1
+  if errorlevel 1 (
+    where python >nul 2>&1
+    if errorlevel 1 (
+      echo No se encontro Python. Instalalo desde https://www.python.org/downloads/
+      pause
+      exit /b 1
+    )
+    python -m venv .venv
+  ) else (
+    py -3 -m venv .venv
+  )
+  if errorlevel 1 (
+    echo No se pudo crear el entorno virtual.
+    pause
+    exit /b 1
+  )
+  echo Instalando dependencias...
+  ".venv\Scripts\python.exe" -m pip install --upgrade pip
+  ".venv\Scripts\python.exe" -m pip install -r requirements.txt
+  if errorlevel 1 (
+    echo Fallo la instalacion de dependencias.
+    pause
+    exit /b 1
+  )
 )
 
 call :ready

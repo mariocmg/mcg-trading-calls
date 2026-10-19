@@ -19,7 +19,6 @@ Yahoo a veces devuelve `openInterest=0` y bid/ask vacíos; el MVP se apoya sobre
 ## Setup
 
 ```bash
-cd calls
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
@@ -48,9 +47,29 @@ python -m flow summary
 
 # Poll cada 15 min (config.yaml → poll_interval_seconds)
 python -m flow watch
+
+# Hit-rate real del filtro contra outcomes 1-5d resueltos
+python -m flow evaluate
+
+# Borrar snapshots antiguos (pregunta antes; --yes para no preguntar)
+python -m flow prune --keep-days 14
 ```
 
 Edita `config.yaml` para watchlist y umbrales (`min_premium_usd`, `min_vol_oi_ratio`, etc.).
+
+## Tests
+
+```bash
+python -m pytest
+```
+
+## Notas sobre el "score"
+
+El score institucional combina un clasificador calibrado con percentiles de prima,
+clusters de strikes y memoria de aciertos. Hasta acumular suficientes outcomes
+reales (1–5 días), el clasificador se entrena con datos sintéticos: el score es
+**heurístico**, no conocimiento aprendido del mercado. `python -m flow evaluate`
+muestra precision@k y hit-rate por bucket con etiquetas reales.
 
 ## Flujo recomendado (semana)
 
