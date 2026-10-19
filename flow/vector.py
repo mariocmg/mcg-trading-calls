@@ -417,7 +417,13 @@ def compute_vector(
     struct *= 1.0 - 0.55 * hedge
 
     trend_z = float(ohlc.get("trend_z") or 0.0) if ohlc.get("ok") else 0.0
-    dir_raw = struct + 0.35 * float(np.tanh(trend_z))
+    # Gamma regime conditions the thesis: long-gamma dampens trends
+    # (mean-reversion, walls hold), short-gamma amplifies them.
+    from flow.levels import gamma_regime
+
+    regime = gamma_regime(levels or [])
+    trend_w = float(regime.get("trend_weight", 1.0))
+    dir_raw = struct + 0.35 * float(np.tanh(trend_z)) * trend_w
 
     if no_flow:
         direction = "NEUTRAL"
@@ -524,9 +530,11 @@ def compute_vector(
         },
         "analysis_summary": analysis.summary,
         "drivers": analysis.drivers,
+        "gamma_regime": regime,
         "method": (
             "Vector = checklist de 5 evidencias (flujo, precio, persistencia, gamma, "
             "estructura); etapa = nº de checks; confianza calibrada con outcomes "
-            "reales cuando hay ≥20; invalidación = muro OI opuesto o ATR + horizonte temporal."
+            "reales cuando hay ≥20; invalidación = muro OI opuesto o ATR + horizonte temporal. "
+            f"Régimen gamma {regime['regime']}: peso de tendencia ×{trend_w}."
         ),
     }

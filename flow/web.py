@@ -348,6 +348,28 @@ def combos(
         conn.close()
 
 
+@app.get("/api/campaigns")
+def campaigns(
+    underlying: str = Query("MU"),
+    status: str = Query("ACTIVE"),
+    limit: int = Query(10, ge=1, le=50),
+):
+    """Accumulation campaigns: same-contract prints linked across scans."""
+    conn, _ = _conn()
+    try:
+        from flow.campaigns import active_summary
+
+        if status.upper() == "ACTIVE":
+            camps = active_summary(conn, underlying=underlying or "MU", limit=limit)
+        else:
+            camps = db.list_campaigns(
+                conn, underlying=underlying or "MU", status=status.upper(), limit=limit
+            )
+        return {"underlying": (underlying or "MU").upper(), "n": len(camps), "campaigns": camps}
+    finally:
+        conn.close()
+
+
 @app.get("/api/vector")
 def vector(
     underlying: str = Query("MU"),

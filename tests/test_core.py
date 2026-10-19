@@ -85,7 +85,7 @@ def test_contract_features_keys():
     feats = contract_features(_alert())
     assert set(feats) == {
         "log_premium", "log_day_premium", "vol_oi", "log_volume", "log_oi",
-        "delta_share", "abs_otm", "dte_norm", "near_term", "is_put", "buyish",
+        "delta_share", "abs_otm", "dte_norm", "near_term", "is_put", "side_aggr",
         "lottery", "hedge_shape", "size_vs_oi", "premium_rank", "opening_risk",
         "sweet_spot_dte", "cluster_flag",
         "iv_change", "rel_vol", "oi_accel", "tod_score",
@@ -93,6 +93,28 @@ def test_contract_features_keys():
     assert feats["lottery"] == 0.0
     deep_lotto = _alert(otm_pct=25.0, price=0.5, premium_usd=10_000.0)
     assert contract_features(deep_lotto)["lottery"] == 1.0
+
+
+def test_side_aggr_confidence_weighted():
+    strong_buy = _alert(side_bias="buyish", side_conf=0.9)
+    assert contract_features(strong_buy)["side_aggr"] == 0.9
+    weak_sell = _alert(side_bias="sellish", side_conf=0.2)
+    assert contract_features(weak_sell)["side_aggr"] == -0.2
+    unknown = _alert(side_bias="unknown", side_conf=0.0)
+    assert contract_features(unknown)["side_aggr"] == 0.0
+
+
+def test_quote_aggression():
+    from flow.util import quote_aggression
+
+    b, c = quote_aggression(1.99, 2.01, 2.009)  # glued to ask, tight spread
+    assert b == "buyish" and c > 0.5
+    b, c = quote_aggression(1.99, 2.01, 2.0)  # mid print
+    assert b == "neutral" and c < 0.4
+    b, c = quote_aggression(1.0, 3.0, 2.9)  # wide spread kills confidence
+    assert c < 0.3
+    assert quote_aggression(None, 2.1, 2.0) == ("unknown", 0.0)
+    assert quote_aggression(2.1, 1.9, 2.0) == ("unknown", 0.0)
 
 
 def test_bucket_key():

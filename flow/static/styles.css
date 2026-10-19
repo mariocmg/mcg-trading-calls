@@ -388,6 +388,23 @@ body {
 .conf-note { font-size: 0.75rem; color: var(--muted); margin: 0.35rem 0 0; }
 .inv-detail { font-size: 0.78rem; color: var(--muted); margin: 0.4rem 0 0; }
 
+.campaigns {
+  margin: 0.7rem var(--pad) 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.camp-list { display: flex; flex-direction: column; gap: 0.45rem; margin-top: 0.5rem; }
+.camp {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 0.8rem; padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.camp .conv { font-size: 0.68rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 999px; }
+.conv.ACCUMULATING { background: #12351f; color: #5fd68a; }
+.conv.REPEATING { background: #3b2f10; color: #f5b942; }
+.conv.BUILDING { background: #1d2f4b; color: #7db4f5; }
+
 .row .flags { font-size: 0.68rem; }
 .flag {
   display: inline-block;

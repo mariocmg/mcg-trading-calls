@@ -130,10 +130,26 @@
         <span id="lv-maxpain-exp" class="mini">—</span>
       </div>
       <div>
+        <span class="mini">Régimen gamma</span>
+        <strong id="lv-regime" class="num">—</strong>
+        <span id="lv-regime-read" class="mini">—</span>
+      </div>
+      <div>
         <span class="mini">Combos desk</span>
         <strong id="lv-combos" class="num">—</strong>
         <span id="lv-combos-detail" class="mini">—</span>
       </div>
+    </section>
+
+    <section class="campaigns" id="campaigns">
+      <div class="tape-head">
+        <div>
+          <h2>Campañas de acumulación</h2>
+          <p class="hint">Prints enlazados por contrato a través de scans</p>
+        </div>
+        <span id="camp-count" class="count">0</span>
+      </div>
+      <div id="camp-list" class="camp-list"></div>
     </section>
 
     <section class="tape-wrap">
@@ -215,7 +231,11 @@
         <li><strong>Etapa</strong> — checklist de 5 evidencias (flujo, precio, persistencia, gamma, estructura): 0–1 Early, 2–3 Building, 4–5 Confirmed.</li>
         <li><strong>Confianza</strong> — evidencia calibrada con el hit-rate real de setups pasados (si hay ≥20); si no, heurística. LOW ≈ cara o cruz.</li>
         <li><strong>Invalidación</strong> — muro OI opuesto más cercano (si está a ≤5%) o swing 10d ± 1.5×ATR, más horizonte temporal del vencimiento con más OI.</li>
-        <li><strong>Outcomes</strong> — el movimiento se mide ajustado por beta (SPY) y normalizado por ATR; también se guarda si el OI siguió creciendo (acumulación).</li>
+        <li><strong>Campañas</strong> — prints del mismo contrato enlazados a través de scans: acumulación real, no alertas sueltas.</li>
+        <li><strong>Side con incertidumbre</strong> — el bias buy/sell lleva confianza (horquilla estrecha + print pegado al bid/ask = fuerte); el modelo lo pesa en continuo, no binario.</li>
+        <li><strong>Régimen gamma</strong> — long-gamma: los muros sujetan (reversión); short-gamma: las rupturas aceleran. Condiciona la tesis direccional.</li>
+        <li><strong>Calidad</strong> — un scan con cadena stale o glitch se guarda marcado pero no emite alertas.</li>
+        <li><strong>Outcomes</strong> — el movimiento se mide ajustado por beta (SPY) y normalizado por ATR, con horizonte según DTE (1d para 0–7 DTE … 5d para >45); también se guarda si el OI siguió creciendo (acumulación).</li>
       </ul>
       <button type="submit" class="btn solid">Entendido</button>
     </form>

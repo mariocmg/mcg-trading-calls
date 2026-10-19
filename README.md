@@ -63,6 +63,9 @@ python -m flow backtest
 # Muros de OI, gamma flip, max pain y posicionamiento por DTE
 python -m flow levels
 
+# Campañas de acumulación activas
+python -m flow campaigns
+
 # Borrar snapshots antiguos (pregunta antes; --yes para no preguntar)
 python -m flow prune --keep-days 14
 ```
@@ -86,12 +89,28 @@ temporal (entrena en la mitad antigua, testea en la nueva) con etiquetas reales.
 
 Las etiquetas de outcome están diseñadas para medir edge, no suerte: el movimiento se
 **ajusta por beta** (se resta el retorno del SPY en la misma ventana), se exige superar
-un **suelo de ruido de 0,5× ATR(14)** y se guarda si el **OI siguió creciendo** (acumulación
+un **suelo de ruido de 0,5× ATR(14)**, el **horizonte depende del DTE**
+(1d para 0–7 DTE … 5d para >45) y se guarda si el **OI siguió creciendo** (acumulación
 real vs lotto que decae). `python -m flow backtest` agrega el walk-forward por score,
 subtipo, mes, blocks y combos.
 
-La confianza del Vector Board (etapa 0–5 checks) se **calibra empíricamente** con el
-hit-rate de setups direccionales pasados cuando hay ≥20; si no, usa la heurística y lo dice.
+La **confianza del Vector Board** (etapa = nº de checks de 5) se **calibra empíricamente**
+con el hit-rate de setups direccionales pasados cuando hay ≥20; si no, usa la heurística
+y lo dice. El **régimen gamma** (long/short según GEX neta) condiciona la tesis: en
+long-gamma la tendencia pesa la mitad (los muros sujetan, reversión), en short-gamma
+pesa ×1,3 (las rupturas aceleran).
+
+El **side bias es continuo con incertidumbre**: cada print lleva `side_conf` (0–1) según
+lo estrecho de la horquilla y lo pegado que esté al bid/ask; el modelo lo usa como
+feature con signo (`side_aggr`) en vez de un binario.
+
+Los prints del mismo contrato se enlazan en **campañas de acumulación** (tabla
+`campaigns`, comando `python -m flow campaigns`, `/api/campaigns`): prima total,
+nº de prints y convicción (BUILDING → REPEATING → ACCUMULATING).
+
+La **puerta de calidad** descarta scans con cadena vacía/stale, salto de spot >8%
+(glitch) o horquillas invertidas: se guardan marcados (`quality_ok=0`) pero no emiten
+alertas para no envenenar la memoria de outcomes.
 
 ## Flujo recomendado (semana)
 

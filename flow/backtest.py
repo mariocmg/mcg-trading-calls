@@ -95,7 +95,7 @@ def temporal_split_report(conn: sqlite3.Connection, min_labels: int = 60) -> dic
     rows = conn.execute(
         """
         SELECT premium_usd, price, volume, open_interest, delta_volume,
-               otm_pct, dte, call_put, side_bias, spot, cluster_n,
+               otm_pct, dte, call_put, side_bias, side_conf, spot, cluster_n,
                iv_change, rel_vol, oi_change_norm, tod_score,
                outcome_hit, created_at
         FROM alerts

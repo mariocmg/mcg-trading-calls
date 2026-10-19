@@ -320,6 +320,45 @@ def backtest(
 
 
 @app.command()
+def campaigns(
+    underlying: str = typer.Option("MU", "--underlying", "-u"),
+    limit: int = typer.Option(10, "--limit", "-n"),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Campañas de acumulación activas (prints enlazados por contrato)."""
+    from flow.campaigns import active_summary
+
+    cfg = _cfg(config)
+    conn = db.connect(cfg["database"])
+    try:
+        camps = active_summary(conn, underlying=underlying, limit=limit)
+        if not camps:
+            console.print("[dim]Sin campañas activas.[/]")
+            raise typer.Exit(0)
+        table = Table(title=f"Campañas activas — {underlying.upper()}")
+        table.add_column("Contrato")
+        table.add_column("CP")
+        table.add_column("Strike", justify="right")
+        table.add_column("Prints", justify="right")
+        table.add_column("Premium $", justify="right")
+        table.add_column("Score máx", justify="right")
+        table.add_column("Convicción")
+        for c in camps:
+            table.add_row(
+                str(c["contract"]),
+                str(c["call_put"]),
+                f"{c['strike']:.0f}",
+                str(c["n_prints"]),
+                f"{c['total_premium']:,.0f}",
+                f"{(c['max_score'] or 0):.2f}",
+                str(c["conviction"]),
+            )
+        console.print(table)
+    finally:
+        conn.close()
+
+
+@app.command()
 def prune(
     keep_days: int = typer.Option(14, "--keep-days", help="Keep snapshots newer than N days"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),

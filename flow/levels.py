@@ -155,6 +155,41 @@ def dte_buckets(rows: list[dict[str, Any]], underlying: str) -> dict[str, dict[s
     return out
 
 
+def gamma_regime(
+    level_rows: list[dict[str, Any]], spot: float | None = None
+) -> dict[str, Any]:
+    """Long-gamma vs short-gamma regime from net GEX.
+
+    Long gamma (net GEX > 0): dealers dampen moves → mean-reversion regime,
+    walls tend to hold, fading extremes works.
+    Short gamma (net GEX < 0): dealers amplify moves → trending regime,
+    breaks accelerate, momentum works.
+    """
+    net_gex = sum(float(r.get("net_gex") or 0) for r in level_rows)
+    # Scale-free: compare net GEX to gross GEX
+    gross = sum(abs(float(r.get("net_gex") or 0)) for r in level_rows)
+    ratio = net_gex / gross if gross > 0 else 0.0
+    if ratio > 0.15:
+        regime = "LONG_GAMMA"
+        read = "régimen long-gamma: los muros sujetan, reversión a la media"
+        trend_weight = 0.5
+    elif ratio < -0.15:
+        regime = "SHORT_GAMMA"
+        read = "régimen short-gamma: las rupturas aceleran, momentum"
+        trend_weight = 1.3
+    else:
+        regime = "NEUTRAL_GAMMA"
+        read = "gamma mixta: sin régimen dominante"
+        trend_weight = 1.0
+    return {
+        "regime": regime,
+        "read_es": read,
+        "net_gex": round(net_gex, 0),
+        "net_gex_ratio": round(ratio, 3),
+        "trend_weight": trend_weight,
+    }
+
+
 def summarize_persisted(level_rows: list[dict[str, Any]], underlying: str) -> dict[str, Any]:
     """Walls / gamma flip / max pain recomputed from persisted strike rows."""
     levels = [
@@ -182,6 +217,7 @@ def summarize_persisted(level_rows: list[dict[str, Any]], underlying: str) -> di
         "n_strikes": len(levels),
         "net_gex": round(net_gex, 0),
         "net_gex_millions": round(net_gex / 1e6, 2),
+        "gamma_regime": gamma_regime(levels),
         **walls,
         "gamma_flip": flip,
         "max_pain_nearest": nearest_mp,
@@ -212,6 +248,7 @@ def compute_positioning_levels(
         "n_strikes": len(levels),
         "net_gex": round(net_gex, 0),
         "net_gex_millions": round(net_gex / 1e6, 2),
+        "gamma_regime": gamma_regime(levels),
         **walls,
         "gamma_flip": flip,
         "max_pain_nearest": nearest_mp,

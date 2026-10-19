@@ -252,6 +252,35 @@ async function loadVector() {
       : "LAST UPDATED —";
   await loadBook(und);
   await loadLevels(und).catch(() => {});
+  await loadCampaigns(und).catch(() => {});
+}
+
+async function loadCampaigns(und) {
+  const data = await api(`/api/campaigns?underlying=${encodeURIComponent(und)}&limit=6`);
+  const list = $("#camp-list");
+  list.textContent = "";
+  const camps = data.campaigns || [];
+  $("#camp-count").textContent = `${camps.length}`;
+  if (!camps.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "Sin campañas activas";
+    list.appendChild(empty);
+    return;
+  }
+  for (const c of camps) {
+    const row = document.createElement("div");
+    row.className = "camp";
+    const left = document.createElement("span");
+    left.textContent =
+      `${c.call_put} ${Number(c.strike).toFixed(0)} · ${c.n_prints} prints · ${money(c.total_premium)}`;
+    const right = document.createElement("span");
+    right.className = `conv ${c.conviction || "BUILDING"}`;
+    right.textContent = c.conviction || "BUILDING";
+    row.appendChild(left);
+    row.appendChild(right);
+    list.appendChild(row);
+  }
 }
 
 async function loadLevels(und) {
@@ -263,6 +292,10 @@ async function loadLevels(und) {
   $("#lv-call-wall").textContent = lv.call_wall ? Number(lv.call_wall.strike).toFixed(0) : "—";
   $("#lv-put-wall").textContent = lv.put_wall ? Number(lv.put_wall.strike).toFixed(0) : "—";
   $("#lv-flip").textContent = lv.gamma_flip ? Number(lv.gamma_flip.strike).toFixed(0) : "—";
+  const regime = lv.gamma_regime || {};
+  $("#lv-regime").textContent =
+    regime.regime === "LONG_GAMMA" ? "Long γ" : regime.regime === "SHORT_GAMMA" ? "Short γ" : "—";
+  $("#lv-regime-read").textContent = regime.read_es || "—";
   const mp = lv.max_pain_nearest;
   $("#lv-maxpain").textContent = mp ? Number(mp.strike).toFixed(0) : "—";
   $("#lv-maxpain-exp").textContent = mp ? String(mp.expiry) : "—";
