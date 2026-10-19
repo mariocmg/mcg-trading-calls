@@ -272,8 +272,9 @@ async function loadCampaigns(und) {
     const row = document.createElement("div");
     row.className = "camp";
     const left = document.createElement("span");
+    const oc = c.outcome_hit == null ? "" : c.outcome_hit ? " ✓" : " ✗";
     left.textContent =
-      `${c.call_put} ${Number(c.strike).toFixed(0)} · ${c.n_prints} prints · ${money(c.total_premium)}`;
+      `${c.call_put} ${Number(c.strike).toFixed(0)} · ${c.n_prints} prints · ${money(c.total_premium)}${oc}`;
     const right = document.createElement("span");
     right.className = `conv ${c.conviction || "BUILDING"}`;
     right.textContent = c.conviction || "BUILDING";

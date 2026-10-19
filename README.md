@@ -106,7 +106,18 @@ feature con signo (`side_aggr`) en vez de un binario.
 
 Los prints del mismo contrato se enlazan en **campañas de acumulación** (tabla
 `campaigns`, comando `python -m flow campaigns`, `/api/campaigns`): prima total,
-nº de prints y convicción (BUILDING → REPEATING → ACCUMULATING).
+nº de prints y convicción (BUILDING → REPEATING → ACCUMULATING). Cada campaña
+también se **juzga como un todo** (¿ganó el desk?): `outcome_hit` con el mismo
+etiquetado ATR/beta que las alertas; el `backtest` y el CLI muestran su hit-rate.
+
+La **memoria de outcomes decae exponencialmente** (half-life 30 días,
+`heuristics.memory.half_life_days` en config.yaml): los regímenes viejos dejan
+de pesar en el score.
+
+El **modelo de régimen** (BULLISH/BEARISH/HEDGING/MIXED) también aprende de
+etiquetas reales: cuando hay ≥60 días con outcomes resueltos, entrena con la
+dirección que funcionó por día; si no, usa el bootstrap sintético y lo indica
+(`model_info()` / UI).
 
 La **puerta de calidad** descarta scans con cadena vacía/stale, salto de spot >8%
 (glitch) o horquillas invertidas: se guardan marcados (`quality_ok=0`) pero no emiten
