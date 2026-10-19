@@ -40,6 +40,12 @@ def _side(bid: float | None, ask: float | None, last: float | None) -> str:
     return quote_side_bias(bid, ask, last)
 
 
+def _aggression(bid: float | None, ask: float | None, last: float | None) -> float:
+    from flow.util import quote_aggression
+
+    return quote_aggression(bid, ask, last)[1]
+
+
 def fetch_cboe_chain(
     symbol: str,
     max_expiries: int = 4,
@@ -97,6 +103,7 @@ def fetch_cboe_chain(
             "dte": dte,
             "spot": spot,
             "side_bias": _side(bid, ask, last),
+            "side_conf": _aggression(bid, ask, last),
             "last_trade_time": str(ltt) if ltt else None,
             "underlying_last_trade_time": str(under_ltt) if under_ltt else None,
             "fetched_at": datetime.now(timezone.utc).isoformat(),

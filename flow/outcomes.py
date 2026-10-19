@@ -1,9 +1,10 @@
-"""Resolve 1–5 day price follow-through and feed it back into the score.
+"""Resolve DTE-appropriate follow-through and feed it back into the score.
 
 Labels are designed to measure *edge*, not luck:
 - ATR-normalized: a move smaller than 0.5× ATR(14) is noise, not a hit.
 - Beta-adjusted: subtract the SPY return over the same window, so a thesis
   that "worked" only because the whole market ripped doesn't count.
+- Horizon from DTE: 0-7 DTE → 1d, 8-14 → 2d, 15-30 → 3d, 31-45 → 4d, >45 → 5d.
 - OI persistence: institutional accumulation keeps OI growing over the next
   sessions; retail lotto decays. Stored as outcome_oi_growth for future
   training and shown in evaluate/backtest.
@@ -36,6 +37,25 @@ def load_memory(conn: sqlite3.Connection) -> dict[str, tuple[int, int]]:
     return {str(r["bucket"]): (int(r["hits"]), int(r["n"])) for r in rows}
 
 
+def _horizon_days(dte: Any) -> int:
+    """Outcome horizon as a function of DTE: short-dated flow is judged fast.
+
+    0-7 DTE → 1d, 8-14 → 2d, 15-30 → 3d, 31-45 → 4d, >45 → 5d.
+    Judging 0DTE flow at 5 days (or 45-DTE flow at 1 day) is noise.
+    """
+    try:
+        d = int(dte)
+    except (TypeError, ValueError):
+        return 3
+    if d <= 7:
+        return 1
+    if d <= 14:
+        return 2
+    if d <= 30:
+        return 3
+    if d <= 45:
+        return 4
+    return 5
 def _thesis_hit(bearish: bool, adj_ret: float, min_move: float) -> int:
     """1 if the beta-adjusted move clears the ATR noise floor in thesis direction."""
     if abs(adj_ret) < min_move:
@@ -47,15 +67,13 @@ def _thesis_hit(bearish: bool, adj_ret: float, min_move: float) -> int:
 
 def resolve_outcomes(conn: sqlite3.Connection, spots: dict[str, float]) -> int:
     """
-    Alerts aged 1–5 days: resolve against ATR-normalized, SPY-adjusted
-    follow-through and OI persistence. Updates inst_memory so similar prints
-    score higher or lower next time.
+    Resolve alerts whose DTE-appropriate horizon has elapsed: ATR-normalized,
+    SPY-adjusted follow-through plus OI persistence. Updates inst_memory so
+    similar prints score higher or lower next time.
     """
     from flow.db import latest_oi_map
 
     now = datetime.now(timezone.utc)
-    lo = now - timedelta(days=6)
-    hi = now - timedelta(days=1)
     rows = conn.execute(
         """
         SELECT id, underlying, call_put, inst_label, spot, dte, otm_pct,
@@ -76,7 +94,11 @@ def resolve_outcomes(conn: sqlite3.Connection, spots: dict[str, float]) -> int:
             continue
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        if not (lo <= ts <= hi):
+        horizon = _horizon_days(r["dte"])
+        age_days = (now - ts).total_seconds() / 86400.0
+        # Resolve once the horizon has elapsed (with a 2-day grace window
+        # so weekend/off-hour alerts still resolve).
+        if not (horizon <= age_days <= horizon + 2):
             continue
         und = str(r["underlying"] or "").upper()
         spot_now = float(spots.get(und) or 0)
@@ -121,10 +143,11 @@ def resolve_outcomes(conn: sqlite3.Connection, spots: dict[str, float]) -> int:
             """
             UPDATE alerts
             SET outcome_hit = ?, outcome_return = ?, outcome_adj_return = ?,
-                outcome_oi_growth = ?, outcome_at = ?
+                outcome_oi_growth = ?, outcome_horizon_days = ?, outcome_at = ?
             WHERE id = ?
             """,
-            (hit, round(raw_ret, 5), round(adj_ret, 5), oi_growth, now.isoformat(), int(r["id"])),
+            (hit, round(raw_ret, 5), round(adj_ret, 5), oi_growth, horizon,
+             now.isoformat(), int(r["id"])),
         )
         key = bucket_key(
             {

@@ -140,6 +140,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for col in ("iv_change", "rel_vol", "oi_change_norm", "tod_score"):
         if col not in cols:
             conn.execute(f"ALTER TABLE alerts ADD COLUMN {col} REAL")
+    if "side_conf" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN side_conf REAL")
+    if "outcome_horizon_days" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN outcome_horizon_days INTEGER")
+    if "campaign_id" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN campaign_id INTEGER")
+    # scans: data-quality gate result
+    scan_cols = {r[1] for r in conn.execute("PRAGMA table_info(scans)").fetchall()}
+    if "quality_ok" not in scan_cols:
+        conn.execute("ALTER TABLE scans ADD COLUMN quality_ok INTEGER")
+    if "quality_note" not in scan_cols:
+        conn.execute("ALTER TABLE scans ADD COLUMN quality_note TEXT")
     # snapshots: gamma for GEX levels
     snap_cols = {r[1] for r in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
     if "gamma" not in snap_cols:
@@ -169,6 +181,28 @@ def _migrate(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_levels_lookup
             ON strike_levels(underlying, expiry, scan_id);
+        CREATE TABLE IF NOT EXISTS campaigns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            underlying TEXT NOT NULL,
+            contract TEXT NOT NULL,
+            call_put TEXT NOT NULL,
+            strike REAL NOT NULL,
+            expiry TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'ACTIVE',
+            started_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_scan_id INTEGER,
+            n_prints INTEGER NOT NULL DEFAULT 0,
+            total_premium REAL NOT NULL DEFAULT 0,
+            total_delta_volume INTEGER NOT NULL DEFAULT 0,
+            avg_score REAL,
+            max_score REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_campaigns_contract
+            ON campaigns(contract, status);
+        CREATE INDEX IF NOT EXISTS idx_campaigns_status
+            ON campaigns(status, updated_at);
         CREATE TABLE IF NOT EXISTS positioning (
             underlying TEXT PRIMARY KEY,
             updated_at TEXT NOT NULL,
@@ -348,6 +382,8 @@ def insert_alerts(conn: sqlite3.Connection, alerts: Iterable[dict[str, Any]]) ->
             a.get("rel_vol"),
             a.get("oi_change_norm"),
             a.get("tod_score"),
+            a.get("side_conf"),
+            a.get("campaign_id"),
         )
         for a in alerts
     ]
@@ -361,8 +397,8 @@ def insert_alerts(conn: sqlite3.Connection, alerts: Iterable[dict[str, Any]]) ->
             vol_oi_ratio, reason, side_bias, spot, otm_pct,
             inst_score, inst_label, inst_reason, inst_subtype, inst_ml_prob, inst_pct,
             cluster_n, opening, is_block, combo_type,
-            iv_change, rel_vol, oi_change_norm, tod_score
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            iv_change, rel_vol, oi_change_norm, tod_score, side_conf, campaign_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         payload,
     )
@@ -648,3 +684,108 @@ def calibration_lookup(
     # persist the check count per alert (see vector output `checks_ok`).
     hits = sum(int(r["outcome_hit"]) for r in rows)
     return hits, len(rows)
+
+
+def find_open_campaign(
+    conn: sqlite3.Connection, contract: str, max_age_hours: float = 6.0
+) -> dict[str, Any] | None:
+    """The ACTIVE campaign for this contract, if touched recently."""
+    row = conn.execute(
+        """
+        SELECT * FROM campaigns
+        WHERE contract = ? AND status = 'ACTIVE'
+          AND updated_at >= datetime('now', ?)
+        ORDER BY updated_at DESC LIMIT 1
+        """,
+        (contract, f"-{max_age_hours} hours"),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def create_campaign(conn: sqlite3.Connection, alert: dict[str, Any]) -> int:
+    now = datetime.now(timezone.utc).isoformat()
+    direction = (
+        "BULLISH"
+        if alert.get("call_put") == "C"
+        else ("BEARISH" if alert.get("call_put") == "P" else "NEUTRAL")
+    )
+    cur = conn.execute(
+        """
+        INSERT INTO campaigns (
+            underlying, contract, call_put, strike, expiry, direction,
+            status, started_at, updated_at, last_scan_id,
+            n_prints, total_premium, total_delta_volume, avg_score, max_score
+        ) VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, 1, ?, ?, ?, ?)
+        """,
+        (
+            alert.get("underlying"), alert.get("contract"), alert.get("call_put"),
+            alert.get("strike"), alert.get("expiry"), direction,
+            now, now, alert.get("scan_id"),
+            float(alert.get("premium_usd") or 0), int(alert.get("delta_volume") or 0),
+            alert.get("inst_score"), alert.get("inst_score"),
+        ),
+    )
+    return int(cur.lastrowid)
+
+
+def touch_campaign(conn: sqlite3.Connection, campaign_id: int, alert: dict[str, Any]) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    score = float(alert.get("inst_score") or 0)
+    conn.execute(
+        """
+        UPDATE campaigns
+        SET updated_at = ?, last_scan_id = ?,
+            n_prints = n_prints + 1,
+            total_premium = total_premium + ?,
+            total_delta_volume = total_delta_volume + ?,
+            avg_score = (avg_score * n_prints + ?) / (n_prints + 1),
+            max_score = MAX(max_score, ?)
+        WHERE id = ?
+        """,
+        (now, alert.get("scan_id"), float(alert.get("premium_usd") or 0),
+         int(alert.get("delta_volume") or 0), score, score, campaign_id),
+    )
+
+
+def close_stale_campaigns(conn: sqlite3.Connection, max_age_hours: float = 6.0) -> int:
+    cur = conn.execute(
+        """
+        UPDATE campaigns SET status = 'CLOSED'
+        WHERE status = 'ACTIVE' AND updated_at < datetime('now', ?)
+        """,
+        (f"-{max_age_hours} hours",),
+    )
+    conn.commit()
+    return cur.rowcount
+
+
+def list_campaigns(
+    conn: sqlite3.Connection,
+    underlying: str | None = None,
+    status: str = "ACTIVE",
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    clauses = ["status = ?"]
+    params: list[Any] = [status]
+    if underlying:
+        clauses.append("underlying = ?")
+        params.append(underlying.upper())
+    params.append(limit)
+    rows = conn.execute(
+        f"""
+        SELECT * FROM campaigns WHERE {' AND '.join(clauses)}
+        ORDER BY total_premium DESC LIMIT ?
+        """,
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mark_scan_quality(
+    conn: sqlite3.Connection, scan_id: int, ok: bool, note: str = ""
+) -> None:
+    conn.execute(
+        "UPDATE scans SET quality_ok = ?, quality_note = ? WHERE id = ?",
+        (1 if ok else 0, note, scan_id),
+    )
+    conn.commit()

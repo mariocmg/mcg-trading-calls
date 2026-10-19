@@ -197,6 +197,7 @@ def score_contracts(
                 "vol_oi_ratio": None if vol_oi is None else round(vol_oi, 3),
                 "reason": ",".join(reasons),
                 "side_bias": row.get("side_bias", "unknown"),
+                "side_conf": float(row.get("side_conf") or 0.0),
                 "spot": spot_f,
                 "otm_pct": _otm_pct(row["call_put"], float(row["strike"]), spot_f),
                 "event_at": event_at,

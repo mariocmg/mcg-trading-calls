@@ -27,6 +27,14 @@ def _side_from_chain(row: pd.Series) -> str:
     return quote_side_bias(bid, ask, last)
 
 
+def _aggression_from_chain(row: pd.Series) -> float:
+    from flow.util import quote_aggression
+
+    return quote_aggression(
+        safe_float(row.get("bid")), safe_float(row.get("ask")), safe_float(row.get("lastPrice"))
+    )[1]
+
+
 def fetch_chain(
     symbol: str,
     max_expiries: int = 4,
@@ -113,6 +121,7 @@ def fetch_chain(
                         "dte": dte,
                         "spot": spot,
                         "side_bias": _side_from_chain(r),
+                        "side_conf": _aggression_from_chain(r),
                         "last_trade_time": None,
                         "fetched_at": datetime.now(timezone.utc).isoformat(),
                         "source": "yahoo",

@@ -39,15 +39,38 @@ def run_scan(config_path: str | None = None) -> dict[str, Any]:
         prev_id = db.previous_scan_id(conn, scan_id)
         prev_map = db.load_snapshot_map(conn, prev_id) if prev_id else None
 
+        # Data-quality gate: a stale/glitchy chain is stored (marked) but
+        # must never emit alerts — they'd poison the outcome memory.
+        from flow.quality import assess_chain_quality
+
+        prev_spot = None
+        if prev_map:
+            try:
+                spots_prev = [float(r["spot"]) for r in prev_map.values() if float(r["spot"] or 0) > 0]
+                if spots_prev:
+                    spots_prev.sort()
+                    prev_spot = spots_prev[len(spots_prev) // 2]
+            except (TypeError, ValueError, KeyError):
+                pass
+        quality_ok, quality_note = assess_chain_quality(rows, prev_spot=prev_spot)
+        db.mark_scan_quality(conn, scan_id, quality_ok, quality_note)
+
         # If volumes jump vs previous snap (Cboe stale → Yahoo), baseline once.
         baseline_only = _provider_reset(rows, prev_map)
         if baseline_only:
             alerts: list[dict[str, Any]] = []
+        elif not quality_ok:
+            alerts = []
         else:
             resolve_outcomes(conn, spots_from_rows(rows))
             h = dict(h)
             h["_memory"] = load_memory(conn)
             alerts = score_contracts(rows, prev_map, scan_id, h, conn=conn, model_path=model_path)
+            # Link prints into accumulation campaigns before persisting
+            from flow.campaigns import close_stale, link_alerts
+
+            link_alerts(conn, alerts)
+            close_stale(conn)
             db.insert_alerts(conn, alerts)
         underlyings = sorted({str(r.get("underlying") or "").upper() for r in rows if r.get("underlying")})
         positionings = {}
@@ -84,6 +107,8 @@ def run_scan(config_path: str | None = None) -> dict[str, Any]:
         "source": source,
         "fallback_reason": fallback or None,
         "baseline_only": baseline_only,
+        "quality_ok": quality_ok,
+        "quality_note": quality_note,
         "positioning": book,
         "all_positioning": positionings,
     }

@@ -59,6 +59,36 @@ def quote_side_bias(bid: float | None, ask: float | None, last: float | None) ->
     return "buyish" if last >= m else "sellish"
 
 
+def quote_aggression(
+    bid: float | None, ask: float | None, last: float | None
+) -> tuple[str, float]:
+    """Continuous side read with uncertainty: (bias, confidence 0..1).
+
+    A print glued to the ask with a tight spread is strong evidence of buying;
+    a mid print with a wide spread is noise. Confidence penalizes both wide
+    spreads (stale/illiquid quotes) and mid-print ambiguity, so downstream
+    logic can weight the read instead of treating it as certain.
+    """
+    if last is None or bid is None or ask is None or ask <= bid or bid <= 0:
+        return "unknown", 0.0
+    spread = ask - bid
+    mid = (bid + ask) / 2.0
+    if mid <= 0:
+        return "unknown", 0.0
+    spread_pct = spread / mid
+    pos = (last - bid) / spread  # 0 = at bid, 1 = at ask
+    if pos >= 0.75:
+        bias = "buyish"
+    elif pos <= 0.25:
+        bias = "sellish"
+    else:
+        bias = "neutral"
+    tight = max(0.0, 1.0 - spread_pct / 0.04)  # full marks while spread < 4%
+    edge = abs(pos - 0.5) * 2.0               # 0 at mid, 1 touching bid/ask
+    conf = round(tight * (0.35 + 0.65 * edge), 3)
+    return bias, conf
+
+
 def et_today() -> date:
     """Calendar date in America/New_York (options session date)."""
     from flow.market_hours import session_date_et

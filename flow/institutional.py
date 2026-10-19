@@ -34,7 +34,7 @@ FEATURE_NAMES = [
     "dte_norm",
     "near_term",
     "is_put",
-    "buyish",
+    "side_aggr",        # signed side read: +conf (buyish) .. -conf (sellish), 0 = unknown
     "lottery",          # cheap deep-OTM
     "hedge_shape",      # short-dated mild-OTM put
     "size_vs_oi",       # delta_vol / max(oi,1)
@@ -49,7 +49,7 @@ FEATURE_NAMES = [
 ]
 
 #: Bump when FEATURE_NAMES changes — old persisted models are retrained.
-FEATURE_VERSION = 2
+FEATURE_VERSION = 3
 
 _MODEL: CalibratedClassifierCV | None = None
 
@@ -82,7 +82,11 @@ def contract_features(a: dict[str, Any], premium_rank: float = 0.5, cluster_n: i
     vol_oi = (vol / oi) if oi > 0 else 0.0
     near = 1.0 if dte <= 7 else 0.0
     is_put = 1.0 if a.get("call_put") == "P" else 0.0
-    buyish = 1.0 if str(a.get("side_bias") or "") in ("buyish", "buy") else 0.0
+    side = str(a.get("side_bias") or "")
+    conf = max(0.0, min(1.0, _safe(a.get("side_conf"), 0.0)))
+    # Signed, confidence-weighted side read: +conf for buying, -conf for
+    # selling, 0 when unknown — the model learns to trust strong reads only.
+    side_aggr = conf if side in ("buyish", "buy") else (-conf if side in ("sellish", "sell") else 0.0)
     
     # Lottery: deep OTM + cheap premium per contract (typical retail)
     lottery = 1.0 if (abs(otm) >= 12 and price < 1.25 and prem < 150_000) else 0.0
@@ -117,7 +121,7 @@ def contract_features(a: dict[str, Any], premium_rank: float = 0.5, cluster_n: i
         "dte_norm": min(dte, 60.0) / 60.0,
         "near_term": near,
         "is_put": is_put,
-        "buyish": buyish,
+        "side_aggr": side_aggr,
         "lottery": lottery,
         "hedge_shape": hedge,
         "size_vs_oi": min(dvol / max(oi, 1.0), 5.0),
@@ -158,7 +162,7 @@ def _synthetic(rng: np.random.Generator, n: int = 3000) -> tuple[np.ndarray, np.
             dte_n = min(dte_val / 60.0, 1.0)
             near = 1.0 if dte_val <= 7 else 0.0
             is_put = 1.0 if rng.random() < 0.45 else 0.0
-            buyish = 1.0 if rng.random() < 0.65 else 0.0
+            side_aggr = float(rng.choice([0.85, 0.4, -0.3], p=[0.45, 0.35, 0.20]))
             lottery = 1.0 if rng.random() < 0.02 else 0.0
             hedge = 1.0 if (is_put and near and otm <= 6) else 0.0
             size_oi = abs(rng.normal(0.25, 0.18))
@@ -183,7 +187,7 @@ def _synthetic(rng: np.random.Generator, n: int = 3000) -> tuple[np.ndarray, np.
             dte_n = min(dte_val / 60.0, 1.0)
             near = 1.0 if dte_val <= 7 else 0.0
             is_put = 1.0 if rng.random() < 0.50 else 0.0
-            buyish = 1.0 if rng.random() < 0.45 else 0.0
+            side_aggr = float(rng.choice([0.7, 0.2, -0.2, 0.0], p=[0.25, 0.25, 0.20, 0.30]))
             lottery = 1.0 if (otm >= 12 and rng.random() < 0.65) else 0.0
             hedge = 0.0
             size_oi = abs(rng.normal(0.04, 0.05))
@@ -207,7 +211,7 @@ def _synthetic(rng: np.random.Generator, n: int = 3000) -> tuple[np.ndarray, np.
             min(dte_n, 1.0),
             near,
             is_put,
-            buyish,
+            side_aggr,
             lottery,
             hedge,
             min(size_oi, 5.0),
@@ -273,7 +277,7 @@ def _train_from_outcomes(conn) -> tuple | None:
     rows = conn.execute(
         """
         SELECT premium_usd, price, volume, open_interest, delta_volume,
-               otm_pct, dte, call_put, side_bias, spot, cluster_n, outcome_hit,
+               otm_pct, dte, call_put, side_bias, side_conf, spot, cluster_n, outcome_hit,
                iv_change, rel_vol, oi_change_norm, tod_score
         FROM alerts
         WHERE outcome_hit IS NOT NULL
