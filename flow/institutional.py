@@ -1,9 +1,15 @@
 """
-Per-contract institutional filter (AI + structure rules).
+Per-contract institutional filter (heuristic score + structure rules).
 
 Delayed chains cannot prove 'smart money', but we can reject retail noise:
 tiny premium, lottery OTM, micro Δvol, and keep size + structure that
 looks like desk / hedge / directional accumulation.
+
+NOTE on the ML component: until enough real 1-5d outcome labels accumulate,
+the classifier is trained on synthetic data (see _train_synthetic) — its
+"probability" is a heuristic score encoding the author's assumptions, not
+learned market knowledge. Check model_info() and run `python -m flow evaluate`
+for real hit rates.
 """
 
 from __future__ import annotations
@@ -188,34 +194,154 @@ def _synthetic(rng: np.random.Generator, n: int = 3000) -> tuple[np.ndarray, np.
     return np.asarray(X, dtype=float), np.asarray(y, dtype=int)
 
 
-def get_model() -> CalibratedClassifierCV:
-    """Calibrated Gradient Boosting Classifier (Platt scaling) for P(institutional)."""
-    global _MODEL
-    if _MODEL is None:
-        rng = np.random.default_rng(42)
-        X, y = _synthetic(rng, n=2400)
-        base = Pipeline(
-            [
-                ("scaler", StandardScaler()),
-                (
-                    "clf",
-                    GradientBoostingClassifier(
-                        random_state=42,
-                        max_depth=3,
-                        n_estimators=60,
-                        learning_rate=0.07,
-                        subsample=0.85,
-                    ),
+_MODEL_INFO: dict[str, Any] = {"synthetic": True, "source": "none", "n_train": 0}
+
+#: Minimum labeled alerts (with outcome_hit) needed before training on real
+#: follow-through instead of the synthetic fallback.
+MIN_REAL_LABELS = 80
+
+
+def default_model_path():
+    from pathlib import Path
+    import os
+
+    env = os.environ.get("FLOW_MODEL_PATH")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parent.parent / "data" / "institutional_model.pkl"
+
+
+def _build_pipeline() -> Pipeline:
+    base = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "clf",
+                GradientBoostingClassifier(
+                    random_state=42,
+                    max_depth=3,
+                    n_estimators=60,
+                    learning_rate=0.07,
+                    subsample=0.85,
                 ),
-            ]
-        )
-        try:
-            cal = CalibratedClassifierCV(estimator=base, method="sigmoid", cv=3)
-        except TypeError:
-            cal = CalibratedClassifierCV(base_estimator=base, method="sigmoid", cv=3)
-        cal.fit(X, y)
-        _MODEL = cal
+            ),
+        ]
+    )
+    try:
+        return CalibratedClassifierCV(estimator=base, method="sigmoid", cv=3)
+    except TypeError:  # very old scikit-learn
+        return CalibratedClassifierCV(base_estimator=base, method="sigmoid", cv=3)
+
+
+def _train_from_outcomes(conn) -> tuple | None:
+    """Train on REAL 1-5d follow-through labels (outcome_hit) when available.
+
+    Returns None when there aren't enough labeled alerts yet, so the caller
+    can use the synthetic bootstrap instead.
+    """
+    rows = conn.execute(
+        """
+        SELECT premium_usd, price, volume, open_interest, delta_volume,
+               otm_pct, dte, call_put, side_bias, spot, cluster_n, outcome_hit
+        FROM alerts
+        WHERE outcome_hit IS NOT NULL
+          AND inst_score IS NOT NULL
+          AND premium_usd IS NOT NULL
+        ORDER BY id DESC
+        LIMIT 5000
+        """
+    ).fetchall()
+    if len(rows) < MIN_REAL_LABELS:
+        return None
+    X, y = [], []
+    for r in rows:
+        d = dict(r)
+        feats = contract_features(d, premium_rank=0.5, cluster_n=int(d.get("cluster_n") or 1))
+        X.append([feats[k] for k in FEATURE_NAMES])
+        y.append(int(d["outcome_hit"]))
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=int)
+    if len(np.unique(y)) < 2:
+        return None  # single class -> can't train a classifier
+    cal = _build_pipeline()
+    cal.fit(X, y)
+    return cal, {"synthetic": False, "source": "outcomes", "n_train": len(y)}
+
+
+def _train_synthetic() -> tuple:
+    """Bootstrap fallback: gaussian blobs hand-written in _synthetic().
+
+    Honest framing: this teaches the model the author's own assumptions, so
+    its 'probabilities' are a heuristic score, NOT learned market knowledge.
+    Only used until enough real outcome labels exist.
+    """
+    rng = np.random.default_rng(42)
+    X, y = _synthetic(rng, n=2400)
+    cal = _build_pipeline()
+    cal.fit(X, y)
+    return cal, {"synthetic": True, "source": "synthetic", "n_train": len(y)}
+
+
+def _count_labels(conn) -> int:
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM alerts WHERE outcome_hit IS NOT NULL AND inst_score IS NOT NULL"
+        ).fetchone()
+        return int(row["n"]) if row else 0
+    except Exception:
+        return 0
+
+
+def get_model(conn=None, model_path=None, force_retrain: bool = False) -> CalibratedClassifierCV:
+    """Calibrated Gradient Boosting Classifier for P(institutional).
+
+    Load order: (1) persisted joblib model, (2) train on real outcome labels
+    if enough exist, (3) synthetic bootstrap. The fitted model is cached and
+    persisted to disk so restarts don't retrain from scratch. If the cached
+    model is synthetic and enough real labels have accumulated since, it
+    upgrades automatically. Use model_info() to see which training data was
+    used.
+    """
+    from pathlib import Path
+
+    global _MODEL, _MODEL_INFO
+    path = Path(model_path) if model_path else default_model_path()
+    upgrade = (
+        _MODEL is not None
+        and _MODEL_INFO.get("synthetic")
+        and conn is not None
+        and _count_labels(conn) >= MIN_REAL_LABELS
+    )
+    if _MODEL is None or force_retrain or upgrade:
+        if path.exists() and not force_retrain and not upgrade:
+            import joblib
+
+            _MODEL = joblib.load(path)
+            _MODEL_INFO = {
+                "synthetic": bool(getattr(_MODEL, "_flow_synthetic", True)),
+                "source": "joblib",
+                "n_train": -1,
+            }
+        else:
+            trained = _train_from_outcomes(conn) if conn is not None else None
+            if trained is not None:
+                _MODEL, _MODEL_INFO = trained
+            else:
+                _MODEL, _MODEL_INFO = _train_synthetic()
+            try:
+                import joblib
+
+                path.parent.mkdir(parents=True, exist_ok=True)
+                _MODEL._flow_synthetic = _MODEL_INFO["synthetic"]
+                joblib.dump(_MODEL, path)
+            except Exception:
+                pass  # persistence is best-effort; the in-memory model still works
     return _MODEL
+
+
+def model_info() -> dict[str, Any]:
+    """Describe the training data behind the current model (honesty helper)."""
+    return dict(_MODEL_INFO)
 
 
 def day_premium(a: dict[str, Any]) -> float:
@@ -366,15 +492,23 @@ def filter_institutional(
     min_percentile: float = 0.82,
     cluster_percentile: float = 0.68,
     memory: dict[str, tuple[int, int]] | None = None,
+    conn=None,
+    model_path=None,
 ) -> list[dict[str, Any]]:
     """
-    Calibrated AI model P(institutional) synthesized with today's premium percentile,
-    strike cluster sweep bonus, structural breakdown, and historical realized accuracy.
+    Heuristic institutional filter: a calibrated ML score blended with today's
+    premium percentile, strike-cluster sweep bonus, structural breakdown and
+    historical realized accuracy.
+
+    Honest note: until enough real outcome labels exist, the ML component is
+    trained on synthetic data (see _train_synthetic) — treat its probability
+    as a heuristic score, not learned market knowledge. Use model_info() /
+    the `evaluate` CLI command to check real hit rates.
     """
     if not candidates:
         return []
 
-    clf = get_model()
+    clf = get_model(conn=conn, model_path=model_path)
     premiums = chain_premiums(chain or candidates)
     sizes = _cluster_sizes(candidates)
     ordered_idx = sorted(

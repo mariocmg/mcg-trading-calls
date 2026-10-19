@@ -59,7 +59,6 @@ CREATE INDEX IF NOT EXISTS idx_alerts_underlying ON alerts(underlying);
 CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_event_at ON alerts(event_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_scan ON alerts(scan_id);
-CREATE INDEX IF NOT EXISTS idx_alerts_outcome ON alerts(outcome_hit);
 """
 
 _INITIALIZED_DBS: set[str] = set()
@@ -124,6 +123,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE alerts ADD COLUMN outcome_at TEXT")
     if "opening" not in cols:
         conn.execute("ALTER TABLE alerts ADD COLUMN opening INTEGER")
+    if "inst_subtype" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN inst_subtype TEXT")
+    if "inst_ml_prob" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN inst_ml_prob REAL")
+    if "inst_pct" not in cols:
+        conn.execute("ALTER TABLE alerts ADD COLUMN inst_pct REAL")
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS inst_memory (
@@ -158,18 +163,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def run_maintenance(conn: sqlite3.Connection, keep_snapshot_days: int = 14) -> dict[str, int]:
-    """Startup maintenance: clean off-hours noise and prune older snapshots."""
-    purged_hours = purge_off_hours_alerts(conn)
-    purged_non_inst = purge_non_institutional(conn)
-    pruned_snaps = cleanup_old_snapshots(conn, keep_days=keep_snapshot_days)
-    return {
-        "purged_off_hours": purged_hours,
-        "purged_non_institutional": purged_non_inst,
-        "pruned_snapshots": pruned_snaps,
-    }
-
-
 def cleanup_old_snapshots(conn: sqlite3.Connection, keep_days: int = 14) -> int:
     """Prune snapshots older than keep_days to control database growth."""
     cur = conn.execute(
@@ -190,37 +183,6 @@ def cleanup_old_snapshots(conn: sqlite3.Connection, keep_days: int = 14) -> int:
           AND id NOT IN (SELECT DISTINCT scan_id FROM alerts)
         """,
         (f"-{int(keep_days)} days",),
-    )
-    conn.commit()
-    return int(cur.rowcount or 0)
-
-
-def purge_off_hours_alerts(conn: sqlite3.Connection) -> int:
-    """Remove tape rows whose trade/scan time falls outside RTH."""
-    from flow.market_hours import is_rth_timestamp
-
-    rows = conn.execute("SELECT id, event_at, created_at FROM alerts").fetchall()
-    drop: list[int] = []
-    for r in rows:
-        stamp = r["event_at"] or r["created_at"]
-        if not is_rth_timestamp(stamp):
-            drop.append(int(r["id"]))
-    if not drop:
-        return 0
-    conn.executemany("DELETE FROM alerts WHERE id = ?", [(i,) for i in drop])
-    conn.commit()
-    return len(drop)
-
-
-def purge_non_institutional(conn: sqlite3.Connection) -> int:
-    """Drop legacy tape rows that never passed the AI institutional gate."""
-    cur = conn.execute(
-        """
-        DELETE FROM alerts
-        WHERE inst_score IS NULL
-           OR inst_label IS NULL
-           OR inst_label NOT IN ('INSTITUTIONAL', 'HEDGE')
-        """
     )
     conn.commit()
     return int(cur.rowcount or 0)
@@ -341,6 +303,9 @@ def insert_alerts(conn: sqlite3.Connection, alerts: Iterable[dict[str, Any]]) ->
             a.get("inst_score"),
             a.get("inst_label"),
             a.get("inst_reason"),
+            a.get("inst_subtype"),
+            a.get("inst_ml_prob"),
+            a.get("inst_pct"),
             a.get("cluster_n"),
             a.get("opening"),
         )
@@ -354,8 +319,9 @@ def insert_alerts(conn: sqlite3.Connection, alerts: Iterable[dict[str, Any]]) ->
             scan_id, created_at, event_at, underlying, contract, call_put, strike, expiry,
             dte, price, volume, open_interest, delta_volume, premium_usd,
             vol_oi_ratio, reason, side_bias, spot, otm_pct,
-            inst_score, inst_label, inst_reason, cluster_n, opening
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            inst_score, inst_label, inst_reason, inst_subtype, inst_ml_prob, inst_pct,
+            cluster_n, opening
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         payload,
     )
@@ -378,15 +344,39 @@ def load_snapshot_map(conn: sqlite3.Connection, scan_id: int) -> dict[str, sqlit
     return {r["contract"]: r for r in rows}
 
 
+# Labels that pass the institutional gate. Used by every read path so the
+# CLI, the web UI and the summary always count the same thing.
+INSTITUTIONAL_LABELS = ("INSTITUTIONAL", "HEDGE")
+
+DEFAULT_MIN_SCORE = 0.5
+
+
+def is_institutional_row(r: sqlite3.Row, min_score: float = DEFAULT_MIN_SCORE) -> bool:
+    """Shared predicate: RTH stamp + institutional label + score threshold."""
+    from flow.market_hours import is_rth_timestamp
+
+    stamp = r["event_at"] or r["created_at"]
+    if not is_rth_timestamp(stamp):
+        return False
+    keys = r.keys()
+    label = r["inst_label"] if "inst_label" in keys else None
+    if label not in INSTITUTIONAL_LABELS:
+        return False
+    score = r["inst_score"] if "inst_score" in keys else None
+    if score is None or float(score) < min_score:
+        return False
+    return True
+
+
 def recent_alerts(
     conn: sqlite3.Connection,
     limit: int = 50,
     underlying: str | None = None,
     call_put: str | None = None,
     days: int | None = None,
+    after_id: int | None = None,
+    min_score: float = DEFAULT_MIN_SCORE,
 ) -> list[sqlite3.Row]:
-    from flow.market_hours import is_rth_timestamp
-
     clauses: list[str] = []
     params: list[Any] = []
     if underlying:
@@ -398,8 +388,12 @@ def recent_alerts(
     if days is not None:
         clauses.append("COALESCE(event_at, created_at) >= datetime('now', ?)")
         params.append(f"-{int(days)} days")
+    if after_id is not None:
+        clauses.append("id > ?")
+        params.append(int(after_id))
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    # Over-fetch then keep only RTH + AI-institutional stamps.
+    # Over-fetch then apply the shared institutional predicate in Python
+    # (the RTH check can't be expressed in SQL).
     fetch_n = max(limit * 5, 250)
     params.append(fetch_n)
     rows = conn.execute(
@@ -408,14 +402,7 @@ def recent_alerts(
     ).fetchall()
     out: list[sqlite3.Row] = []
     for r in rows:
-        stamp = r["event_at"] or r["created_at"]
-        if not is_rth_timestamp(stamp):
-            continue
-        label = r["inst_label"] if "inst_label" in r.keys() else None
-        score = r["inst_score"] if "inst_score" in r.keys() else None
-        if label not in ("INSTITUTIONAL", "HEDGE"):
-            continue
-        if score is None or float(score) < 0.5:
+        if not is_institutional_row(r, min_score=min_score):
             continue
         out.append(r)
         if len(out) >= limit:
@@ -423,22 +410,44 @@ def recent_alerts(
     return out
 
 
-def weekly_summary(conn: sqlite3.Connection, days: int = 7) -> list[sqlite3.Row]:
-    return conn.execute(
+def weekly_summary(
+    conn: sqlite3.Connection,
+    days: int = 7,
+    min_score: float = DEFAULT_MIN_SCORE,
+) -> list[dict[str, Any]]:
+    """Call/put premium totals over the last N days, using the SAME
+    institutional predicate as recent_alerts so the numbers agree."""
+    rows = conn.execute(
         """
-        SELECT
-            underlying,
-            call_put,
-            COUNT(*) AS alert_count,
-            COALESCE(SUM(premium_usd), 0) AS total_premium,
-            COALESCE(SUM(delta_volume), 0) AS total_delta_volume
+        SELECT underlying, call_put, premium_usd, delta_volume,
+               event_at, created_at, inst_label, inst_score
         FROM alerts
         WHERE created_at >= datetime('now', ?)
-        GROUP BY underlying, call_put
-        ORDER BY underlying, call_put
+          AND inst_label IN ('INSTITUTIONAL', 'HEDGE')
+          AND inst_score IS NOT NULL
+          AND inst_score >= ?
         """,
-        (f"-{days} days",),
+        (f"-{days} days", min_score),
     ).fetchall()
+    agg: dict[tuple[str, str], dict[str, float]] = {}
+    for r in rows:
+        if not is_institutional_row(r, min_score=min_score):
+            continue
+        key = (r["underlying"], r["call_put"])
+        b = agg.setdefault(key, {"alert_count": 0, "total_premium": 0.0, "total_delta_volume": 0})
+        b["alert_count"] += 1
+        b["total_premium"] += float(r["premium_usd"] or 0)
+        b["total_delta_volume"] += float(r["delta_volume"] or 0)
+    return [
+        {
+            "underlying": u,
+            "call_put": cp,
+            "alert_count": int(b["alert_count"]),
+            "total_premium": b["total_premium"],
+            "total_delta_volume": int(b["total_delta_volume"]),
+        }
+        for (u, cp), b in sorted(agg.items())
+    ]
 
 
 def latest_scan_info(conn: sqlite3.Connection) -> sqlite3.Row | None:

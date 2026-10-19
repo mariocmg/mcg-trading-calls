@@ -1,65 +1,30 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
 import yfinance as yf
 
+from flow.util import dte_from_expiry, mid, quote_side_bias, safe_float, safe_int, with_retries
 
-def _mid(bid: float | None, ask: float | None, last: float | None) -> float | None:
-    try:
-        if bid is not None and ask is not None and bid > 0 and ask > 0:
-            return (float(bid) + float(ask)) / 2.0
-        if last is not None and last > 0:
-            return float(last)
-        if ask is not None and ask > 0:
-            return float(ask)
-        if bid is not None and bid > 0:
-            return float(bid)
-    except (TypeError, ValueError):
-        return None
-    return None
+# Backwards-compatible aliases (moved to flow.util)
+_mid = mid
+_safe_int = safe_int
+_safe_float = safe_float
 
 
-def _safe_int(v: Any) -> int | None:
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return None
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return None
-
-
-def _safe_float(v: Any) -> float | None:
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
-
-
-def _dte(expiry: str) -> int:
-    exp = date.fromisoformat(expiry)
-    return (exp - date.today()).days
+def _dte(expiry: str) -> int | None:
+    # DTE measured in America/New_York (options session date), not server local time
+    return dte_from_expiry(expiry)
 
 
 def _side_from_chain(row: pd.Series) -> str:
     """Weak bias from delayed chain: last vs mid. Not true tape aggression."""
-    last = _safe_float(row.get("lastPrice"))
-    bid = _safe_float(row.get("bid"))
-    ask = _safe_float(row.get("ask"))
-    if last is None or bid is None or ask is None or ask <= bid:
-        return "unknown"
-    mid = (bid + ask) / 2.0
-    if last >= ask * 0.98:
-        return "buyish"
-    if last <= bid * 1.02:
-        return "sellish"
-    if last >= mid:
-        return "buyish"
-    return "sellish"
+    last = safe_float(row.get("lastPrice"))
+    bid = safe_float(row.get("bid"))
+    ask = safe_float(row.get("ask"))
+    return quote_side_bias(bid, ask, last)
 
 
 def fetch_chain(
@@ -69,23 +34,31 @@ def fetch_chain(
     max_dte: int = 45,
     max_moneyness: float = 0.12,
 ) -> list[dict[str, Any]]:
-    """Pull delayed options chain rows for nearby expiries via Yahoo Finance."""
+    """Pull delayed options chain rows for nearby expiries via Yahoo Finance.
+
+    Network failures are swallowed and reported as an empty chain (the caller
+    treats this as "no data" instead of crashing with a traceback).
+    """
     ticker = yf.Ticker(symbol)
     spot = None
     try:
-        fast = ticker.fast_info
+        fast = with_retries(lambda: ticker.fast_info, attempts=2, base_delay=1.0)
         spot = float(getattr(fast, "last_price", None) or fast.get("lastPrice") or 0) or None
     except Exception:
         spot = None
     if spot is None:
         try:
-            hist = ticker.history(period="1d")
-            if not hist.empty:
+            hist = with_retries(lambda: ticker.history(period="1d"), attempts=2, base_delay=1.0)
+            if hist is not None and not hist.empty:
                 spot = float(hist["Close"].iloc[-1])
         except Exception:
             spot = None
 
-    expiries = list(ticker.options or [])
+    # A Yahoo hiccup here used to kill the whole CLI with a traceback.
+    try:
+        expiries = list(with_retries(lambda: ticker.options or [], attempts=3, base_delay=1.5))
+    except Exception:
+        return []
     if not expiries:
         return []
 
@@ -93,13 +66,15 @@ def fetch_chain(
     used = 0
     for expiry in expiries:
         dte = _dte(expiry)
-        if dte < min_dte or dte > max_dte:
+        if dte is None or dte < min_dte or dte > max_dte:
             continue
         if used >= max_expiries:
             break
         used += 1
         try:
-            chain = ticker.option_chain(expiry)
+            chain = with_retries(
+                lambda e=expiry: ticker.option_chain(e), attempts=2, base_delay=1.0
+            )
         except Exception:
             continue
 

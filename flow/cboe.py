@@ -1,47 +1,21 @@
-from __future__ import annotations
-
 """Cboe public delayed options chain (no API key)."""
+
+from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from typing import Any
-from urllib.request import Request, urlopen
-import json
 import re
+
+from flow.util import dte_from_expiry, http_get_json, mid, quote_side_bias, safe_float, safe_int
 
 OCC_RE = re.compile(
     r"^(?P<root>[A-Z]+)(?P<yy>\d{2})(?P<mm>\d{2})(?P<dd>\d{2})(?P<cp>[CP])(?P<strike>\d{8})$"
 )
 
-
-def _safe_float(v: Any) -> float | None:
-    try:
-        if v is None:
-            return None
-        x = float(v)
-        if x != x:  # NaN
-            return None
-        return x
-    except (TypeError, ValueError):
-        return None
-
-
-def _safe_int(v: Any) -> int | None:
-    f = _safe_float(v)
-    if f is None:
-        return None
-    return int(f)
-
-
-def _mid(bid: float | None, ask: float | None, last: float | None) -> float | None:
-    if bid is not None and ask is not None and bid > 0 and ask > 0:
-        return (bid + ask) / 2.0
-    if last is not None and last > 0:
-        return last
-    if ask is not None and ask > 0:
-        return ask
-    if bid is not None and bid > 0:
-        return bid
-    return None
+# Backwards-compatible aliases (moved to flow.util)
+_safe_float = safe_float
+_safe_int = safe_int
+_mid = mid
 
 
 def _parse_occ(symbol: str) -> dict[str, Any] | None:
@@ -56,19 +30,14 @@ def _parse_occ(symbol: str) -> dict[str, Any] | None:
         "expiry": expiry,
         "call_put": m["cp"],
         "strike": strike,
-        "dte": (date(year, mm, dd) - date.today()).days,
+        # DTE measured in America/New_York (options session date), not server local time
+        "dte": dte_from_expiry(expiry),
     }
 
 
 def _side(bid: float | None, ask: float | None, last: float | None) -> str:
-    if last is None or bid is None or ask is None or ask <= bid:
-        return "unknown"
-    mid = (bid + ask) / 2.0
-    if last >= ask * 0.98:
-        return "buyish"
-    if last <= bid * 1.02:
-        return "sellish"
-    return "buyish" if last >= mid else "sellish"
+    # Kept as a thin alias; logic lives in flow.util.quote_side_bias
+    return quote_side_bias(bid, ask, last)
 
 
 def fetch_cboe_chain(
@@ -80,9 +49,8 @@ def fetch_cboe_chain(
 ) -> list[dict[str, Any]]:
     sym = symbol.upper()
     url = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
-    req = Request(url, headers={"User-Agent": "FLOW/0.1 (+local research)"})
-    with urlopen(req, timeout=45) as resp:
-        payload = json.load(resp)
+    # Retries with backoff; tighter timeout so a hung CDN can't stall the scan loop
+    payload = http_get_json(url, timeout=15.0, attempts=3)
 
     data = payload.get("data") or {}
     spot = _safe_float(data.get("current_price"))
