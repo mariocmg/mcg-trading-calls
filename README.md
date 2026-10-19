@@ -110,6 +110,13 @@ nº de prints y convicción (BUILDING → REPEATING → ACCUMULATING). Cada camp
 también se **juzga como un todo** (¿ganó el desk?): `outcome_hit` con el mismo
 etiquetado ATR/beta que las alertas; el `backtest` y el CLI muestran su hit-rate.
 
+**Niveles que buscan las instituciones** (`flow/targets.py`, `/api/targets`,
+comando `python -m flow targets`, panel en la UI): del flujo institucional, qué
+strikes concentran la prima — objetivos call (alcistas), objetivos put
+(bajistas) y niveles de cobertura (hedges) — agrupados en bandas del ~2%. Es
+flujo de hoy, no OI acumulado: responde a dónde apuntan, no dónde están las
+coberturas.
+
 La **memoria de outcomes decae exponencialmente** (half-life 30 días,
 `heuristics.memory.half_life_days` en config.yaml): los regímenes viejos dejan
 de pesar en el score.

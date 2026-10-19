@@ -141,6 +141,24 @@
       </div>
     </section>
 
+    <section class="levels" id="targets">
+      <div>
+        <span class="mini">🎯 Calls buscan</span>
+        <strong id="tg-bull" class="num">—</strong>
+        <span id="tg-bull-detail" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">🔻 Puts buscan</span>
+        <strong id="tg-bear" class="num">—</strong>
+        <span id="tg-bear-detail" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">🛡 Cobertura en</span>
+        <strong id="tg-hedge" class="num">—</strong>
+        <span id="tg-hedge-detail" class="mini">—</span>
+      </div>
+    </section>
+
     <section class="campaigns" id="campaigns">
       <div class="tape-head">
         <div>
@@ -227,6 +245,7 @@
         <li><strong>Blocks</strong> — salto de volumen ≥3× el histórico del contrato (mín. 500) en un scan.</li>
         <li><strong>Precio medio</strong> — strike ponderado por premium de la sesión: a qué nivel se posicionan calls y puts.</li>
         <li><strong>Niveles</strong> — muros de OI (call = resistencia, put = soporte), gamma flip y max pain por vencimiento.</li>
+        <li><strong>Niveles que buscan</strong> — dónde va la prima institucional: 🎯 strikes donde compran calls (objetivo alcista), 🔻 donde compran puts (objetivo bajista), 🛡 donde pagan cobertura. Es flujo de hoy, no OI acumulado.</li>
         <li><strong>Dirección</strong> — residual del flow institucional (tras descontar hedges) + confirmación de precio. Sin tape RTH → Sin señal.</li>
         <li><strong>Etapa</strong> — checklist de 5 evidencias (flujo, precio, persistencia, gamma, estructura): 0–1 Early, 2–3 Building, 4–5 Confirmed.</li>
         <li><strong>Confianza</strong> — evidencia calibrada con el hit-rate real de setups pasados (si hay ≥20); si no, heurística. LOW ≈ cara o cruz.</li>

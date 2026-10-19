@@ -308,6 +308,33 @@ async function loadLevels(und) {
   } catch {
     $("#lv-combos").textContent = "—";
   }
+  try {
+    await loadTargets(und);
+  } catch {
+    /* targets panel stays empty */
+  }
+}
+
+async function loadTargets(und) {
+  const t = await api(`/api/targets?underlying=${encodeURIComponent(und)}&days=7`);
+  const fmtLvl = (lv) => {
+    if (!lv) return "—";
+    const lo = Number(lv.strike_lo).toFixed(0);
+    const hi = Number(lv.strike_hi).toFixed(0);
+    return lo === hi ? lo : `${lo}–${hi}`;
+  };
+  const fmtDetail = (lv) =>
+    lv ? `${money(lv.premium_usd)} · ${lv.n_prints} prints` : "—";
+  const groups = [
+    ["bull_targets", "#tg-bull", "#tg-bull-detail"],
+    ["bear_targets", "#tg-bear", "#tg-bear-detail"],
+    ["hedge_levels", "#tg-hedge", "#tg-hedge-detail"],
+  ];
+  for (const [key, main, detail] of groups) {
+    const lvls = (t && t[key]) || [];
+    $(main).textContent = lvls.slice(0, 2).map(fmtLvl).join(" · ") || "—";
+    $(detail).textContent = lvls.length ? fmtDetail(lvls[0]) : "—";
+  }
 }
 
 async function loadBook(und) {
