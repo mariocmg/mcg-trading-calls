@@ -85,4 +85,27 @@ def format_report(rep: dict[str, Any]) -> str:
     lines.append("Hit-rate por subtipo:")
     for s in rep["by_subtype"]:
         lines.append(f"  {s['subtype']}: {s['hit_rate']:.1%}  (n={s['n']})")
+    ts = rep.get("temporal_split")
+    if ts:
+        lines.append("")
+        if ts.get("ok"):
+            lines.append(
+                f"Split temporal (entrenado en mitad antigua, test en mitad nueva): "
+                f"train hr {ts['train_hit_rate']:.1%} → test hr {ts['test_hit_rate']:.1%}"
+            )
+            for k, v in ts["precision_at"].items():
+                lines.append(f"  test precision {k}: {'—' if v is None else f'{v:.1%}'}")
+        else:
+            lines.append(f"Split temporal: {ts.get('reason')}")
     return "\n".join(lines)
+
+
+def full_report(conn: sqlite3.Connection, min_score: float = 0.0) -> dict[str, Any]:
+    """Evaluation + temporal split + walk-forward, in one dict."""
+    from flow.backtest import temporal_split_report, walk_forward
+
+    rep = evaluate(conn, min_score=min_score)
+    if rep.get("n"):
+        rep["temporal_split"] = temporal_split_report(conn)
+        rep["walk_forward"] = walk_forward(conn, min_score=max(min_score, 0.5))
+    return rep

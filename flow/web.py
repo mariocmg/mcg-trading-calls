@@ -274,7 +274,7 @@ def positioning(underlying: str = Query("MU")):
         row = db.load_positioning(conn, underlying)
         if not row:
             return {"underlying": underlying.upper(), "ok": False}
-        return {
+        out = {
             "ok": True,
             "underlying": row["underlying"],
             "updated_at": row["updated_at"],
@@ -290,6 +290,59 @@ def positioning(underlying: str = Query("MU")):
                 "gex": row["gex_value"],
                 "side": row["gex_side"],
             },
+        }
+        # DTE buckets from the latest chain snapshot (where they position in time)
+        try:
+            from flow.levels import dte_buckets
+
+            snaps = db.latest_snapshots(conn, underlying)
+            out["dte_buckets"] = dte_buckets([dict(s) for s in snaps], underlying)
+        except Exception:
+            out["dte_buckets"] = None
+        return out
+    finally:
+        conn.close()
+
+
+@app.get("/api/levels")
+def levels(underlying: str = Query("MU")):
+    """Strike-level positioning: OI walls, gamma flip, max pain."""
+    conn, _ = _conn()
+    try:
+        from flow.levels import summarize_persisted
+
+        rows = db.load_strike_levels(conn, underlying)
+        if not rows:
+            return {"underlying": underlying.upper(), "ok": False}
+        summary = summarize_persisted([dict(r) for r in rows], underlying)
+        return {"ok": True, **summary}
+    finally:
+        conn.close()
+
+
+@app.get("/api/combos")
+def combos(
+    underlying: str = Query("MU"),
+    days: int = Query(7, ge=1, le=90),
+    limit: int = Query(400, ge=20, le=1500),
+):
+    """Multi-leg institutional structures detected in recent alerts."""
+    conn, cfg = _conn()
+    try:
+        from flow.combos import detect_combos
+
+        rows = db.recent_alerts(
+            conn,
+            limit=limit,
+            underlying=underlying.upper() if underlying else None,
+            days=days,
+            min_score=_inst_min_score(cfg),
+        )
+        found = detect_combos([_row(r) for r in rows])
+        return {
+            "underlying": (underlying or "MU").upper(),
+            "n": len(found),
+            "combos": [c.as_dict() for c in found[:25]],
         }
     finally:
         conn.close()
@@ -311,7 +364,16 @@ def vector(
             days=days,
             min_score=_inst_min_score(cfg),
         )
-        return compute_vector([_row(r) for r in rows], underlying=underlying or "MU")
+        try:
+            levels = db.load_strike_levels(conn, underlying or "MU")
+        except Exception:
+            levels = []
+        return compute_vector(
+            [_row(r) for r in rows],
+            underlying=underlying or "MU",
+            conn=conn,
+            levels=[dict(r) for r in levels],
+        )
     finally:
         conn.close()
 

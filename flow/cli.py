@@ -81,7 +81,7 @@ def _inst_min_score(cfg) -> float:
 
 def _print_alerts(alerts: list[dict]) -> None:
     table = Table(title="Unusual / institutional flow alerts")
-    left = {"Underlying", "Why", "Bias", "CP", "Expiry", "Subtype"}
+    left = {"Underlying", "Why", "Bias", "CP", "Expiry", "Subtype", "Flags"}
     for col in (
         "Underlying",
         "CP",
@@ -94,6 +94,7 @@ def _print_alerts(alerts: list[dict]) -> None:
         "Premium $",
         "Score",
         "Subtype",
+        "Flags",
         "Why",
     ):
         table.add_column(col, justify="left" if col in left else "right")
@@ -103,6 +104,11 @@ def _print_alerts(alerts: list[dict]) -> None:
         score = a.get("inst_score")
         score_str = f"{score:.2f}" if score is not None else "—"
         subtype = str(a.get("inst_subtype") or a.get("inst_label") or "—")
+        flags = []
+        if a.get("is_block"):
+            flags.append("BLOCK")
+        if a.get("combo_type"):
+            flags.append(str(a["combo_type"]))
         table.add_row(
             a["underlying"],
             a["call_put"],
@@ -115,6 +121,7 @@ def _print_alerts(alerts: list[dict]) -> None:
             f"{a['premium_usd']:,.0f}",
             score_str,
             subtype,
+            " ".join(flags) or "—",
             a["reason"],
         )
     console.print(table)
@@ -221,12 +228,12 @@ def evaluate(
     config: Optional[str] = typer.Option(None, "--config", "-c"),
 ) -> None:
     """Hit-rate real del filtro institucional contra outcomes 1-5d resueltos."""
-    from flow.evaluate import evaluate as run_evaluation, format_report
+    from flow.evaluate import format_report, full_report
 
     cfg = _cfg(config)
     conn = db.connect(cfg["database"])
     try:
-        rep = run_evaluation(conn, min_score=0.0)
+        rep = full_report(conn, min_score=0.0)
         console.print(format_report(rep))
         from flow.institutional import model_info
 
@@ -235,6 +242,79 @@ def evaluate(
             f"\n[dim]Modelo: {'sintético (heurístico)' if info.get('synthetic') else info.get('source', '?')} "
             f"· n_train={info.get('n_train')}[/dim]"
         )
+    finally:
+        conn.close()
+
+
+@app.command()
+def levels(
+    underlying: str = typer.Option("MU", "--underlying", "-u"),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Muros de OI, gamma flip, max pain y buckets de DTE."""
+    from flow.levels import summarize_persisted
+
+    cfg = _cfg(config)
+    conn = db.connect(cfg["database"])
+    try:
+        rows = db.load_strike_levels(conn, underlying)
+        if not rows:
+            console.print("[dim]Sin niveles todavía. Ejecuta un scan primero.[/]")
+            raise typer.Exit(0)
+        s = summarize_persisted([dict(r) for r in rows], underlying)
+        console.print(f"[bold]{s['underlying']}[/] · {s['n_strikes']} strikes")
+        console.print(f"GEX neta: ${s['net_gex_millions']}M")
+        if s["call_wall"]:
+            console.print(f"Muro call: {s['call_wall']['strike']:g} (OI {s['call_wall']['oi']:,})")
+        if s["put_wall"]:
+            console.print(f"Muro put:  {s['put_wall']['strike']:g} (OI {s['put_wall']['oi']:,})")
+        if s["gamma_flip"]:
+            console.print(f"Gamma flip: {s['gamma_flip']['strike']:g}")
+        if s["max_pain_nearest"]:
+            mp = s["max_pain_nearest"]
+            console.print(f"Max pain ({mp['expiry']}): {mp['strike']:g}")
+        # DTE buckets from latest snapshot
+        from flow.levels import dte_buckets
+
+        snaps = db.latest_snapshots(conn, underlying)
+        buckets = dte_buckets([dict(x) for x in snaps], underlying)
+        table = Table(title="Posicionamiento por DTE")
+        table.add_column("Bucket")
+        table.add_column("Call $", justify="right")
+        table.add_column("Put $", justify="right")
+        table.add_column("Call share", justify="right")
+        for name, b in buckets.items():
+            share = f"{b['call_share']:.0%}" if b["call_share"] is not None else "—"
+            table.add_row(name, f"{b['call_premium']:,.0f}", f"{b['put_premium']:,.0f}", share)
+        console.print(table)
+    finally:
+        conn.close()
+
+
+@app.command()
+def backtest(
+    underlying: Optional[str] = typer.Option(None, "--underlying", "-u"),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Walk-forward: ¿funcionaron las alertas de alto score? (outcomes resueltos)."""
+    from flow.backtest import format_report, temporal_split_report, walk_forward
+
+    cfg = _cfg(config)
+    conn = db.connect(cfg["database"])
+    try:
+        rep = walk_forward(conn, underlying=underlying, min_score=0.5)
+        console.print(format_report(rep))
+        ts = temporal_split_report(conn)
+        console.print("")
+        if ts.get("ok"):
+            console.print(
+                f"[dim]Split temporal: entrenado en {ts['n_train']} antiguas → "
+                f"test hit-rate {ts['test_hit_rate']:.1%} (base {ts['train_hit_rate']:.1%})[/dim]"
+            )
+            for k, v in ts["precision_at"].items():
+                console.print(f"[dim]  test precision {k}: {'—' if v is None else f'{v:.1%}'}[/dim]")
+        else:
+            console.print(f"[dim]Split temporal: {ts.get('reason')}[/dim]")
     finally:
         conn.close()
 

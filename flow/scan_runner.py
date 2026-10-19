@@ -55,6 +55,14 @@ def run_scan(config_path: str | None = None) -> dict[str, Any]:
             p_book = summarize(rows, und)
             db.save_positioning(conn, p_book)
             positionings[und] = p_book
+            # Strike levels (GEX / walls / max pain / DTE buckets) per scan
+            try:
+                from flow.levels import compute_positioning_levels
+
+                lv = compute_positioning_levels(rows, und)
+                db.save_strike_levels(conn, scan_id, und, lv["levels"])
+            except Exception:
+                pass  # levels are informational; never fail the scan
     except Exception:
         # Atomic scan: a mid-scan crash must not leave a half-written scan behind.
         _delete_scan(conn, scan_id)
