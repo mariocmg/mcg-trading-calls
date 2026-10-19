@@ -372,6 +372,31 @@ def campaigns(
         conn.close()
 
 
+@app.get("/api/targets")
+def targets(
+    underlying: str = Query("MU"),
+    days: int = Query(7, ge=1, le=90),
+    limit: int = Query(400, ge=20, le=1500),
+):
+    """Institutional target levels: which strikes desks are aiming at."""
+    conn, cfg = _conn()
+    try:
+        from flow.targets import institutional_targets
+
+        rows = db.recent_alerts(
+            conn,
+            limit=limit,
+            underlying=underlying.upper() if underlying else None,
+            days=days,
+            min_score=_inst_min_score(cfg),
+        )
+        return institutional_targets(
+            [_row(r) for r in rows], underlying=underlying or "MU"
+        )
+    finally:
+        conn.close()
+
+
 @app.get("/api/vector")
 def vector(
     underlying: str = Query("MU"),

@@ -320,6 +320,57 @@ def backtest(
 
 
 @app.command()
+def targets(
+    underlying: str = typer.Option("MU", "--underlying", "-u"),
+    days: int = typer.Option(7, "--days", "-d"),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+) -> None:
+    """Niveles que buscan las instituciones: objetivos call/put y coberturas."""
+    from flow.targets import institutional_targets
+
+    cfg = _cfg(config)
+    conn = db.connect(cfg["database"])
+    try:
+        rows = db.recent_alerts(
+            conn, limit=400, underlying=underlying.upper(),
+            days=days, min_score=_inst_min_score(cfg),
+        )
+        res = institutional_targets([dict(r) for r in rows], underlying=underlying)
+        if not res["n_alerts"]:
+            console.print("[dim]Sin alertas institucionales en el periodo.[/]")
+            raise typer.Exit(0)
+        for title, key, icon in (
+            ("Objetivos alcistas (calls)", "bull_targets", "🎯"),
+            ("Objetivos bajistas (puts)", "bear_targets", "🔻"),
+            ("Niveles de cobertura (hedges)", "hedge_levels", "🛡"),
+        ):
+            lvls = res[key]
+            if not lvls:
+                continue
+            table = Table(title=f"{icon} {title} — {underlying.upper()}")
+            table.add_column("Nivel", justify="right")
+            table.add_column("Prima $", justify="right")
+            table.add_column("Prints", justify="right")
+            table.add_column("Bloques", justify="right")
+            table.add_column("OTM%", justify="right")
+            table.add_column("Score", justify="right")
+            for lv in lvls:
+                lo, hi = lv["strike_lo"], lv["strike_hi"]
+                nivel = f"{lo:.0f}" if lo == hi else f"{lo:.0f}–{hi:.0f}"
+                table.add_row(
+                    nivel,
+                    f"{lv['premium_usd']:,.0f}",
+                    str(lv["n_prints"]),
+                    str(lv["n_blocks"]),
+                    f"{lv['otm_pct']:+.1f}%" if lv["otm_pct"] is not None else "—",
+                    f"{lv['avg_score']:.2f}" if lv["avg_score"] else "—",
+                )
+            console.print(table)
+    finally:
+        conn.close()
+
+
+@app.command()
 def campaigns(
     underlying: str = typer.Option("MU", "--underlying", "-u"),
     limit: int = typer.Option(10, "--limit", "-n"),
