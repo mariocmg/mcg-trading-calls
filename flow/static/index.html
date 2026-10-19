@@ -69,6 +69,13 @@
 
       <p id="vec-updated" class="updated">LAST UPDATED —</p>
       <span id="v-sym" class="sr-only">MU</span>
+
+      <div class="checks-wrap">
+        <span class="mini">Evidencia</span>
+        <div id="v-checks" class="checks"></div>
+        <p id="v-conf-note" class="conf-note"></p>
+      </div>
+      <p id="v-inv-detail" class="inv-detail"></p>
     </section>
 
     <section class="book" id="book">
@@ -86,6 +93,46 @@
         <span class="mini">Gamma neta</span>
         <strong id="book-gex">—</strong>
         <span class="mini">calls + · puts −</span>
+      </div>
+      <div>
+        <span class="mini">DTE 0–7</span>
+        <strong id="book-dte1" class="num">—</strong>
+        <span id="book-dte1s" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">DTE 8–21</span>
+        <strong id="book-dte2" class="num">—</strong>
+        <span id="book-dte2s" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">DTE 22–45</span>
+        <strong id="book-dte3" class="num">—</strong>
+        <span id="book-dte3s" class="mini">—</span>
+      </div>
+    </section>
+
+    <section class="levels" id="levels">
+      <div>
+        <span class="mini">Muro call (resistencia)</span>
+        <strong id="lv-call-wall" class="num">—</strong>
+      </div>
+      <div>
+        <span class="mini">Muro put (soporte)</span>
+        <strong id="lv-put-wall" class="num">—</strong>
+      </div>
+      <div>
+        <span class="mini">Gamma flip</span>
+        <strong id="lv-flip" class="num">—</strong>
+      </div>
+      <div>
+        <span class="mini">Max pain</span>
+        <strong id="lv-maxpain" class="num">—</strong>
+        <span id="lv-maxpain-exp" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">Combos desk</span>
+        <strong id="lv-combos" class="num">—</strong>
+        <span id="lv-combos-detail" class="mini">—</span>
       </div>
     </section>
 
@@ -146,6 +193,7 @@
           <span>C/P</span>
           <span>OTM</span>
           <span>IA</span>
+          <span>Flags</span>
           <span>DTE</span>
           <span>Premium</span>
         </div>
@@ -158,12 +206,16 @@
     <form method="dialog" class="modal-card">
       <h3>Cómo se calcula</h3>
       <ul>
-        <li><strong>Score</strong> — vol/OI, urgencia (DTE + OTM), repetición de strikes y lado en el ask. Si falta un dato, no entra y el peso se reparte. Volumen &gt; open interest = apertura.</li>
+        <li><strong>Score</strong> — modelo GradientBoosting (22 features: tamaño, vol/OI, urgencia, IV, volumen relativo, hora del día…) entrenado con outcomes reales 1–5d cuando hay ≥80; si no, bootstrap sintético (se avisa).</li>
+        <li><strong>Combos</strong> — risk reversals, spreads, collars y strangles detectados entre prints del mismo vencimiento; suman bonus al score.</li>
+        <li><strong>Blocks</strong> — salto de volumen ≥3× el histórico del contrato (mín. 500) en un scan.</li>
         <li><strong>Precio medio</strong> — strike ponderado por premium de la sesión: a qué nivel se posicionan calls y puts.</li>
+        <li><strong>Niveles</strong> — muros de OI (call = resistencia, put = soporte), gamma flip y max pain por vencimiento.</li>
         <li><strong>Dirección</strong> — residual del flow institucional (tras descontar hedges) + confirmación de precio. Sin tape RTH → Sin señal.</li>
-        <li><strong>Etapa</strong> — Early → Building → Confirmed según alineación flow, precio y persistencia.</li>
-        <li><strong>Confianza</strong> — mezcla de esos scores; mucho hedge baja la convicción.</li>
-        <li><strong>Invalidación</strong> — swing 10d ± 1.5×ATR.</li>
+        <li><strong>Etapa</strong> — checklist de 5 evidencias (flujo, precio, persistencia, gamma, estructura): 0–1 Early, 2–3 Building, 4–5 Confirmed.</li>
+        <li><strong>Confianza</strong> — evidencia calibrada con el hit-rate real de setups pasados (si hay ≥20); si no, heurística. LOW ≈ cara o cruz.</li>
+        <li><strong>Invalidación</strong> — muro OI opuesto más cercano (si está a ≤5%) o swing 10d ± 1.5×ATR, más horizonte temporal del vencimiento con más OI.</li>
+        <li><strong>Outcomes</strong> — el movimiento se mide ajustado por beta (SPY) y normalizado por ATR; también se guarda si el OI siguió creciendo (acumulación).</li>
       </ul>
       <button type="submit" class="btn solid">Entendido</button>
     </form>

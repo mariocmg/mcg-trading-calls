@@ -116,6 +116,22 @@ function renderFeed() {
         ? `${a.inst_label === "HEDGE" ? "HDG" : "INST"} ${Math.round(Number(a.inst_score) * 100)}${Number(a.opening) ? " · OPEN" : ""}`
         : "—";
     row.appendChild(span(`ia ${a.inst_label === "HEDGE" ? "hedge" : "inst"}`, ia));
+    const flags = document.createElement("span");
+    flags.className = "flags";
+    if (Number(a.is_block)) {
+      const f = document.createElement("i");
+      f.className = "flag";
+      f.textContent = "BLOCK";
+      flags.appendChild(f);
+    }
+    if (a.combo_type) {
+      const f = document.createElement("i");
+      f.className = "flag combo";
+      f.textContent = String(a.combo_type).replace(/_/g, " ");
+      flags.appendChild(f);
+    }
+    if (!flags.hasChildNodes()) flags.textContent = "—";
+    row.appendChild(flags);
     row.appendChild(span("", a.dte == null ? "—" : String(a.dte)));
     row.appendChild(span("prem", money(a.premium_usd)));
     feed.appendChild(row);
@@ -207,6 +223,24 @@ async function loadVector() {
   arrow.textContent = inv.arrow === "up" ? "↑" : inv.arrow === "down" ? "↓" : "";
   arrow.className = "inv-arrow " + (inv.arrow || "");
 
+  // Evidence checklist (5 checks → stage)
+  const checksEl = $("#v-checks");
+  checksEl.textContent = "";
+  for (const c of v.checks || []) {
+    const chip = document.createElement("span");
+    chip.className = "check" + (c.ok ? " on" : "");
+    chip.textContent = `${c.ok ? "✓" : "✗"} ${c.label}`;
+    chip.title = c.detail || "";
+    checksEl.appendChild(chip);
+  }
+  $("#v-conf-note").textContent = v.confidence_note || "";
+
+  const invBits = [];
+  if (inv.reason) invBits.push(inv.reason);
+  if (inv.method) invBits.push(`método: ${inv.method}`);
+  if (inv.time) invBits.push(`horizonte: ${inv.time}${inv.time_reason ? ` (${inv.time_reason})` : ""}`);
+  $("#v-inv-detail").textContent = invBits.join(" · ");
+
   const status = $("#vec-status");
   status.textContent = v.status || "DEGRADED";
   status.className = "status-chip" + (v.status === "LIVE" ? " ok" : " warn");
@@ -217,6 +251,29 @@ async function loadVector() {
       ? `LAST UPDATED ${ts.toLocaleString()}`
       : "LAST UPDATED —";
   await loadBook(und);
+  await loadLevels(und).catch(() => {});
+}
+
+async function loadLevels(und) {
+  const lv = await api(`/api/levels?underlying=${encodeURIComponent(und)}`);
+  if (!lv.ok) {
+    for (const id of ["#lv-call-wall", "#lv-put-wall", "#lv-flip", "#lv-maxpain"]) $(id).textContent = "—";
+    return;
+  }
+  $("#lv-call-wall").textContent = lv.call_wall ? Number(lv.call_wall.strike).toFixed(0) : "—";
+  $("#lv-put-wall").textContent = lv.put_wall ? Number(lv.put_wall.strike).toFixed(0) : "—";
+  $("#lv-flip").textContent = lv.gamma_flip ? Number(lv.gamma_flip.strike).toFixed(0) : "—";
+  const mp = lv.max_pain_nearest;
+  $("#lv-maxpain").textContent = mp ? Number(mp.strike).toFixed(0) : "—";
+  $("#lv-maxpain-exp").textContent = mp ? String(mp.expiry) : "—";
+  try {
+    const cb = await api(`/api/combos?underlying=${encodeURIComponent(und)}&days=7`);
+    $("#lv-combos").textContent = String(cb.n || 0);
+    $("#lv-combos-detail").textContent =
+      (cb.combos || []).slice(0, 2).map((c) => c.label_es).join(" · ") || "—";
+  } catch {
+    $("#lv-combos").textContent = "—";
+  }
 }
 
 async function loadBook(und) {
@@ -241,6 +298,23 @@ async function loadBook(und) {
   $("#book-gex").textContent = g.ok
     ? `${g.side} ${Number(g.strike).toFixed(0)} · ${money(g.gex)}`
     : "sin gamma (cadena sin greek)";
+
+  // DTE buckets: where they position in time
+  const buckets = b.dte_buckets || {};
+  const names = ["0-7", "8-21", "22-45"];
+  const ids = [["#book-dte1", "#book-dte1s"], ["#book-dte2", "#book-dte2s"], ["#book-dte3", "#book-dte3s"]];
+  names.forEach((name, i) => {
+    const bk = buckets[name];
+    const [vId, sId] = ids[i];
+    if (!bk || (bk.call_premium || 0) + (bk.put_premium || 0) <= 0) {
+      $(vId).textContent = "—";
+      $(sId).textContent = "—";
+      return;
+    }
+    $(vId).textContent = money(bk.call_premium + bk.put_premium);
+    $(sId).textContent =
+      `C ${bk.call_share != null ? Math.round(bk.call_share * 100) + "%" : "—"}`;
+  });
 }
 
 let refreshing = false;

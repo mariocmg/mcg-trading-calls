@@ -10,8 +10,14 @@ Fuentes gratis verificadas: ver [DATA_SOURCES.md](DATA_SOURCES.md).
 1. Poll de cadenas (calls/puts) de un watchlist
 2. Guarda snapshots en SQLite
 3. Compara con el scan anterior → `Δvolume` × precio × 100 = premium estimado
-4. Marca actividad “institucional / unusual” por heurísticas (premium, vol/OI)
-5. Resume sesgo call vs put por underlying
+4. Marca actividad “institucional / unusual” con un modelo GradientBoosting (22 features:
+   tamaño, vol/OI, urgencia, ΔIV, volumen relativo al histórico del contrato, hora del día…)
+   entrenado con outcomes reales 1–5d cuando hay ≥80 (si no, bootstrap sintético — la UI/CLI lo avisa)
+5. **Combos**: detecta risk reversals, spreads, collars y strangles entre prints del mismo vencimiento
+6. **Blocks**: saltos de volumen ≥3× el histórico del contrato en un solo scan
+7. **Niveles**: muros de OI (call = resistencia, put = soporte), gamma flip, max pain por vencimiento,
+   y buckets de DTE (dónde se posicionan en el tiempo)
+8. Resume sesgo call vs put por underlying
 
 **Limitaciones:** sin side real de tape, sin sweeps. El bias buy/sell es débil (last vs bid/ask).
 Yahoo a veces devuelve `openInterest=0` y bid/ask vacíos; el MVP se apoya sobre todo en **volumen × precio (premium)** y en **Δvolumen entre scans**.
@@ -48,8 +54,14 @@ python -m flow summary
 # Poll cada 15 min (config.yaml → poll_interval_seconds)
 python -m flow watch
 
-# Hit-rate real del filtro contra outcomes 1-5d resueltos
+# Hit-rate real del filtro contra outcomes 1-5d resueltos (incluye split temporal)
 python -m flow evaluate
+
+# Walk-forward por bucket de score / subtipo / mes + test de blocks y combos
+python -m flow backtest
+
+# Muros de OI, gamma flip, max pain y posicionamiento por DTE
+python -m flow levels
 
 # Borrar snapshots antiguos (pregunta antes; --yes para no preguntar)
 python -m flow prune --keep-days 14
@@ -65,11 +77,21 @@ python -m pytest
 
 ## Notas sobre el "score"
 
-El score institucional combina un clasificador calibrado con percentiles de prima,
-clusters de strikes y memoria de aciertos. Hasta acumular suficientes outcomes
-reales (1–5 días), el clasificador se entrena con datos sintéticos: el score es
-**heurístico**, no conocimiento aprendido del mercado. `python -m flow evaluate`
-muestra precision@k y hit-rate por bucket con etiquetas reales.
+El score institucional combina un clasificador calibrado (22 features) con percentiles
+de prima, clusters de strikes, memoria de aciertos, bonus por combos multi-leg y flags
+de block. Hasta acumular suficientes outcomes reales (1–5 días), el clasificador se
+entrena con datos sintéticos: el score es **heurístico**, no conocimiento aprendido del
+mercado. `python -m flow evaluate` muestra precision@k, hit-rate por bucket y un split
+temporal (entrena en la mitad antigua, testea en la nueva) con etiquetas reales.
+
+Las etiquetas de outcome están diseñadas para medir edge, no suerte: el movimiento se
+**ajusta por beta** (se resta el retorno del SPY en la misma ventana), se exige superar
+un **suelo de ruido de 0,5× ATR(14)** y se guarda si el **OI siguió creciendo** (acumulación
+real vs lotto que decae). `python -m flow backtest` agrega el walk-forward por score,
+subtipo, mes, blocks y combos.
+
+La confianza del Vector Board (etapa 0–5 checks) se **calibra empíricamente** con el
+hit-rate de setups direccionales pasados cuando hay ≥20; si no, usa la heurística y lo dice.
 
 ## Flujo recomendado (semana)
 

@@ -364,6 +364,43 @@ body {
 .book .up { color: var(--bull); }
 .book .down { color: var(--bear); }
 
+.levels {
+  margin: 0.7rem var(--pad) 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+  gap: 0.8rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.levels strong { display: block; font-size: 1.05rem; margin: 0.15rem 0; }
+
+.checks-wrap { margin-top: 0.6rem; }
+.checks { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.25rem; }
+.check {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.check.on { border-color: var(--bull); color: var(--bull); }
+.conf-note { font-size: 0.75rem; color: var(--muted); margin: 0.35rem 0 0; }
+.inv-detail { font-size: 0.78rem; color: var(--muted); margin: 0.4rem 0 0; }
+
+.row .flags { font-size: 0.68rem; }
+.flag {
+  display: inline-block;
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  margin-right: 0.25rem;
+  background: #3b2f10;
+  color: #f5b942;
+}
+.flag.combo { background: #1d2f4b; color: #7db4f5; }
+
 .tape-head {
   display: flex;
   justify-content: space-between;
@@ -445,7 +482,7 @@ body {
 .tape-cols,
 .row {
   display: grid;
-  grid-template-columns: 1.35fr 0.9fr 1fr 0.55fr 0.95fr 1.25fr 0.55fr 1fr;
+  grid-template-columns: 1.35fr 0.9fr 1fr 0.55fr 0.95fr 1.45fr 0.9fr 0.55fr 1fr;
   gap: 0.35rem;
   padding: 0.7rem 0.2rem;
   align-items: center;
@@ -528,7 +565,7 @@ body {
 @media (max-width: 800px) {
   .signal-body { grid-template-columns: 1fr; }
   .filters { grid-template-columns: 1fr 1fr; }
-  .book { grid-template-columns: 1fr; }
+  .book, .levels { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 560px) {

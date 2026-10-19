@@ -88,6 +88,7 @@ def test_contract_features_keys():
         "delta_share", "abs_otm", "dte_norm", "near_term", "is_put", "buyish",
         "lottery", "hedge_shape", "size_vs_oi", "premium_rank", "opening_risk",
         "sweet_spot_dte", "cluster_flag",
+        "iv_change", "rel_vol", "oi_accel", "tod_score",
     }
     assert feats["lottery"] == 0.0
     deep_lotto = _alert(otm_pct=25.0, price=0.5, premium_usd=10_000.0)
