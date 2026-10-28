@@ -1,104 +1,636 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FLOW — MU</title>
-<style>
-  * { box-sizing: border-box; }
-  body { background: #0a0e14; color: #e6edf3; font-family: system-ui, sans-serif;
-         margin: 0 auto; max-width: 900px; padding: 24px 16px 64px; }
-  header { display: flex; justify-content: space-between; align-items: baseline; }
-  h1 { font-size: 20px; margin: 0; letter-spacing: 2px; }
-  #meta { color: #8b949e; font-size: 13px; }
-  h2 { font-size: 13px; letter-spacing: 2px; color: #8b949e; margin: 32px 0 12px; }
-  #direction { font-size: 44px; font-weight: 800; margin: 8px 0 4px; }
-  #direction.ALCISTA { color: #3fb950; }
-  #direction.BAJISTA { color: #f85149; }
-  #direction.NEUTRAL { color: #d29922; }
-  #headline { font-size: 20px; margin: 0 0 6px; }
-  #evidence { color: #c9d1d9; margin: 0; }
-  #net { color: #8b949e; font-size: 14px; margin-top: 8px; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th { text-align: left; color: #8b949e; font-weight: 600; border-bottom: 1px solid #30363d; padding: 6px 8px 6px 0; }
-  td { border-bottom: 1px solid #21262d; padding: 7px 8px 7px 0; }
-  .buy { color: #3fb950; } .sell { color: #f85149; } .unknown { color: #8b949e; }
-  .levels { font-size: 18px; line-height: 1.9; }
-  .levels b { font-size: 22px; }
-  .levels .lbl { color: #8b949e; font-size: 14px; }
-  button { background: #21262d; color: #e6edf3; border: 1px solid #30363d;
-           border-radius: 6px; padding: 8px 14px; cursor: pointer; font-size: 14px; }
-  button:hover { background: #30363d; }
-  #error { color: #f85149; }
-  .empty { color: #8b949e; }
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FLOW · MU</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=9" />
 </head>
 <body>
-<header>
-  <h1>FLOW · MU</h1>
-  <span id="meta"></span>
-</header>
+  <header class="chrome-bar">
+    <div class="chrome" aria-label="Estado">
+      <span id="live-dot" class="dot off"></span>
+      <span id="status" class="status">conectando…</span>
+      <button type="button" id="btn-live" class="btn text on">LIVE</button>
+      <button type="button" id="btn-scan" class="btn">Actualizar</button>
+    </div>
+  </header>
 
-<h2>VEREDICTO</h2>
-<div id="direction">—</div>
-<p id="headline"></p>
-<p id="evidence"></p>
-<p id="net"></p>
-<p id="error"></p>
+  <div class="app">
+    <section class="signal">
+      <div class="signal-top">
+        <div class="sym-block">
+          <label class="mini">Ticker</label>
+          <select id="f-und" class="sym-select">
+            <option value="MU" selected>MU</option>
+          </select>
+          <div id="vec-status" class="status-chip warn">—</div>
+        </div>
+        <button type="button" id="btn-howto" class="linkish">¿Cómo se calcula?</button>
+      </div>
 
-<h2>PRINTS INUSUALES DEL DÍA</h2>
-<table>
-  <thead><tr><th>Strike</th><th>Vto.</th><th>C/P</th><th>Prima</th><th>Vol / OI</th><th>Sesgo</th></tr></thead>
-  <tbody id="prints"></tbody>
-</table>
+      <div id="vector-row" class="signal-body">
+        <div class="dir-block">
+          <div id="v-dir" class="dir">—</div>
+          <div id="v-state-title" class="state-main">—</div>
+          <p id="v-state-detail" class="state-sub">—</p>
+          <span id="v-state-badge" class="pill">—</span>
+        </div>
 
-<h2>NIVELES — VENCIMIENTO SEMANAL</h2>
-<div class="levels" id="levels"></div>
+        <div class="stats">
+          <div class="stat">
+            <span class="mini">Etapa</span>
+            <div class="stage-track" id="v-stage-track"><i></i><i></i><i></i></div>
+            <strong id="v-stage-label">—</strong>
+          </div>
+          <div class="stat">
+            <span class="mini">Confianza</span>
+            <strong id="v-conf-num" class="conf">—</strong>
+            <div class="conf-bar"><i id="v-conf-bar"></i></div>
+            <span id="v-conf-label" class="mini">—</span>
+          </div>
+          <div class="stat">
+            <span class="mini">Precio</span>
+            <strong id="v-price" class="num">—</strong>
+          </div>
+          <div class="stat">
+            <span class="mini">Invalidación</span>
+            <strong class="num inv">
+              <span id="v-inv-price">—</span>
+              <span id="v-inv-arrow" class="inv-arrow"></span>
+            </strong>
+          </div>
+        </div>
+      </div>
 
-<p style="margin-top:32px"><button id="scanBtn">Escanear ahora</button></p>
+      <p id="vec-updated" class="updated">LAST UPDATED —</p>
+      <span id="v-sym" class="sr-only">MU</span>
+
+      <div class="checks-wrap">
+        <span class="mini">Evidencia</span>
+        <div id="v-checks" class="checks"></div>
+        <p id="v-conf-note" class="conf-note"></p>
+      </div>
+      <p id="v-inv-detail" class="inv-detail"></p>
+    </section>
+
+    <section class="book" id="book">
+      <div>
+        <span class="mini">Premium sesión</span>
+        <strong id="book-net">—</strong>
+        <span id="book-split" class="mini">calls — · puts —</span>
+      </div>
+      <div>
+        <span class="mini">Precio medio</span>
+        <strong id="book-avg">—</strong>
+        <span id="book-avg-split" class="mini">calls — · puts —</span>
+      </div>
+      <div>
+        <span class="mini">Posición nueva</span>
+        <strong id="book-new">—</strong>
+        <span id="book-new-split" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">DTE 0–7</span>
+        <strong id="book-dte1" class="num">—</strong>
+        <span id="book-dte1s" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">DTE 8–21</span>
+        <strong id="book-dte2" class="num">—</strong>
+        <span id="book-dte2s" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">DTE 22–45</span>
+        <strong id="book-dte3" class="num">—</strong>
+        <span id="book-dte3s" class="mini">—</span>
+      </div>
+    </section>
+
+    <section class="levels" id="levels">
+      <div>
+        <span class="mini">Muro call (resistencia)</span>
+        <strong id="lv-call-wall" class="num">—</strong>
+      </div>
+      <div>
+        <span class="mini">Muro put (soporte)</span>
+        <strong id="lv-put-wall" class="num">—</strong>
+      </div>
+      <div>
+        <span class="mini">Max pain</span>
+        <strong id="lv-maxpain" class="num">—</strong>
+        <span id="lv-maxpain-exp" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">Barridos hoy</span>
+        <strong id="lv-sweeps" class="num">—</strong>
+        <span id="lv-sweeps-detail" class="mini">—</span>
+      </div>
+    </section>
+
+    <section class="levels" id="targets">
+      <div>
+        <span class="mini">🎯 Calls buscan</span>
+        <strong id="tg-bull" class="num">—</strong>
+        <span id="tg-bull-detail" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">🔻 Puts buscan</span>
+        <strong id="tg-bear" class="num">—</strong>
+        <span id="tg-bear-detail" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">🛡 Cobertura en</span>
+        <strong id="tg-hedge" class="num">—</strong>
+        <span id="tg-hedge-detail" class="mini">—</span>
+      </div>
+    </section>
+
+    <section class="campaigns" id="campaigns">
+      <div class="tape-head">
+        <div>
+          <h2>Campañas de acumulación</h2>
+          <p class="hint">Contratos con acumulación real en el día (vistos 2+ veces)</p>
+        </div>
+        <span id="camp-count" class="count">0</span>
+      </div>
+      <div id="camp-list" class="camp-list"></div>
+    </section>
+
+    <section class="tape-wrap">
+      <div class="tape-head">
+        <div>
+          <h2>Calls / Puts institucionales</h2>
+          <p class="hint">Prints inusuales del día, con convicción y flags</p>
+        </div>
+        <span id="feed-count" class="count">0</span>
+      </div>
+
+      <div class="filters" id="filters">
+        <label>
+          <span>Lado</span>
+          <select id="f-side">
+            <option value="">Todos</option>
+            <option value="C">Calls</option>
+            <option value="P">Puts</option>
+          </select>
+        </label>
+        <label>
+          <span>DTE</span>
+          <select id="f-dte">
+            <option value="">Cualquiera</option>
+            <option value="7">≤ 7</option>
+            <option value="14">≤ 14</option>
+            <option value="30">≤ 30</option>
+            <option value="45">≤ 45</option>
+          </select>
+        </label>
+        <label>
+          <span>OTM</span>
+          <select id="f-otm">
+            <option value="">Cualquiera</option>
+            <option value="0">Solo OTM</option>
+            <option value="5">≥ 5%</option>
+            <option value="10">≥ 10%</option>
+          </select>
+        </label>
+        <label>
+          <span>Premium mín.</span>
+          <select id="f-prem">
+            <option value="0">Cualquiera</option>
+            <option value="50000">$50K</option>
+            <option value="100000">$100K</option>
+            <option value="250000">$250K</option>
+            <option value="500000">$500K</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="tape">
+        <div class="tape-cols" aria-hidden="true">
+          <span>Hora</span>
+          <span>Ticker</span>
+          <span>Strike</span>
+          <span>C/P</span>
+          <span>OTM</span>
+          <span>IA</span>
+          <span>Flags</span>
+          <span>DTE</span>
+          <span>Premium</span>
+        </div>
+        <div id="feed" class="feed"></div>
+      </div>
+    </section>
+
+    <p class="updated">Datos delayed de Cboe/Yahoo (~15 min de la bolsa). El refresco
+    rápido mantiene la página al día, pero no es cinta en vivo: un feed tick a
+    tick real sería de pago y no está incluido.</p>
+  </div>
+
+  <dialog id="howto-modal" class="modal">
+    <form method="dialog" class="modal-card">
+      <h3>Cómo se calcula</h3>
+      <ul>
+        <li><strong>Print</strong> — un contrato cuenta si mueve dinero serio y es
+        inusual: prima (Δvolumen × precio × 100) ≥ 50.000 $ y Δvolumen ≥ 50
+        contratos y ≥ 0,5 × OI (o volumen del día ≥ OI). El Δvolumen sale de
+        comparar con el scan anterior; el primer scan del día usa el volumen
+        acumulado de la sesión.</li>
+        <li><strong>ΔOI y posición nueva</strong> — el snapshot guarda también el
+        OI previo. Si el OI sube (ΔOI &gt; 0), es apertura: alguien está
+        posicionándose. Si el volumen es alto pero el OI no sube o cae, es
+        cierre o churn, no posicionamiento nuevo. Ojo: el OI intradía de las
+        cadenas delayed suele ser el del cierre anterior, así que el ΔOI del
+        primer scan del día mide el cambio entre sesiones.</li>
+        <li><strong>Barridos</strong> — en un mismo scan, ≥ 3 prints con el mismo
+        sesgo, mismo call/put y mismo vencimiento, en strikes dentro de un
+        10% del spot, cuentan como un barrido (una sola mano agresiva), no
+        como prints sueltos. Dan bonus de convicción.</li>
+        <li><strong>Convicción 0–100</strong> — pesos fijos y visibles, sin modelo:
+        base 20; prima hasta +30 (logarítmica); vol/OI hasta +20; posición
+        nueva +15 (cierre neto −10); sesgo claro +10; barrido +15. Todo
+        recortado a 0–100.</li>
+        <li><strong>Veredicto</strong> — neto ponderado: cada prima con sesgo se
+        multiplica por su convicción/100. Compras de calls y ventas de puts
+        empujan al alza; compras de puts y ventas de calls, a la baja.
+        ≥ +500.000 $ = ALCISTA, ≤ −500.000 $ = BAJISTA, si no NEUTRAL. Los
+        prints sin sesgo claro se listan pero no votan.</li>
+        <li><strong>Confianza</strong> — acuerdo de dirección (neto/bruto
+        ponderado) + magnitud del neto + nº de prints con sesgo. Un NEUTRAL
+        nunca presume: su confianza se divide entre 2.</li>
+        <li><strong>Etapa</strong> — Temprano / Construyendo / Confirmado según
+        dirección, confianza y persistencia (scans consecutivos con la misma
+        dirección). A 30 s por scan, 5 scans son ~2,5 min: persistencia
+        corta, no una tesis de días.</li>
+        <li><strong>Invalidación</strong> — el muro OI opuesto: si ALCISTA, el
+        muro put (perderlo invalida); si BAJISTA, el muro call. NEUTRAL no
+        tiene invalidación.</li>
+        <li><strong>Sesgo compra/venta</strong> — probabilístico, no tape real:
+        último precio pegado al ask (≥ 75% de la horquilla) = compra, pegado
+        al bid (≤ 25%) = venta, en medio = desconocido y no vota.</li>
+        <li><strong>Precio medio</strong> — strike ponderado por prima de la
+        sesión: a qué nivel se posicionan calls y puts.</li>
+        <li><strong>Niveles</strong> — muros de OI del vencimiento semanal (call
+        = resistencia, put = soporte) y max pain. No hay gamma flip ni
+        régimen gamma: la cadena no trae IV ni griegas y no se inventan.</li>
+        <li><strong>Niveles que buscan</strong> — dónde va la prima de hoy:
+        🎯 strike con más prima de compra de calls, 🔻 con más de compra de
+        puts, 🛡 muro put como soporte/cobertura. Es flujo de hoy, no OI
+        acumulado.</li>
+        <li><strong>Campañas</strong> — contratos vistos 2+ veces en el día:
+        acumulación real a través de scans, no alertas sueltas.</li>
+        <li><strong>Refresco</strong> — el servidor escanea cada 30 s con el
+        mercado abierto; la página pregunta cada 10 s (botón LIVE lo pausa).
+        Los datos son delayed ~15 min: rápido no significa en vivo.</li>
+      </ul>
+      <button type="submit" class="btn solid">Entendido</button>
+    </form>
+  </dialog>
 
 <script>
-const $ = id => document.getElementById(id);
-const money = n => '$' + n.toLocaleString('en-US');
-const sideLabel = s => ({ buy: 'COMPRA', sell: 'VENTA', unknown: '?' }[s] || s);
-const sideClass = s => ({ buy: 'buy', sell: 'sell', unknown: 'unknown' }[s] || '');
+const $ = (s) => document.querySelector(s);
+let live = true;
+let state = null;
 
-async function load() {
-  try {
-    const s = await (await fetch('/api/state')).json();
-    if (s.error && !s.verdict) { $('error').textContent = s.error; return; }
-    $('meta').textContent = (s.spot ? 'MU $' + s.spot : '') +
-      ' · ' + (s.source || '') + ' · ' +
-      (s.market_open ? 'mercado abierto' : 'mercado cerrado') +
-      (s.updated_at ? ' · ' + new Date(s.updated_at).toLocaleTimeString() : '');
-    const v = s.verdict;
-    $('direction').textContent = v.direction;
-    $('direction').className = v.direction;
-    $('headline').textContent = v.headline;
-    $('evidence').textContent = v.evidence;
-    $('net').textContent = 'Neto con sesgo: ' + money(v.net) + ' $';
-    $('error').textContent = s.error || '';
-    $('prints').innerHTML = (s.prints || []).map(p =>
-      `<tr><td>${p.strike}</td><td>${p.expiry}</td><td>${p.call_put}</td>` +
-      `<td>${money(p.premium)}</td><td>${p.volume} / ${p.open_interest}</td>` +
-      `<td class="${sideClass(p.side)}">${sideLabel(p.side)}</td></tr>`).join('') ||
-      '<tr><td colspan="6" class="empty">Sin prints inusuales todavía.</td></tr>';
-    const lv = s.levels;
-    $('levels').innerHTML = lv
-      ? `<div><span class="lbl">Vencimiento</span> ${lv.expiry}</div>` +
-        `<div><span class="lbl">Muro call (resistencia)</span> <b>${lv.call_wall.strike}</b> <span class="lbl">OI ${lv.call_wall.oi.toLocaleString()}</span></div>` +
-        `<div><span class="lbl">Muro put (soporte)</span> <b>${lv.put_wall.strike}</b> <span class="lbl">OI ${lv.put_wall.oi.toLocaleString()}</span></div>` +
-        `<div><span class="lbl">Max pain</span> <b>${lv.max_pain.strike}</b></div>`
-      : '<span class="empty">Sin niveles todavía.</span>';
-  } catch (e) { $('error').textContent = 'No se pudo cargar el estado: ' + e; }
+function money(n) {
+  const v = Number(n) || 0;
+  if (Math.abs(v) >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+  if (Math.abs(v) >= 1e3) return `$${(v / 1e3).toFixed(0)}K`;
+  return `$${Math.round(v)}`;
 }
-$('scanBtn').onclick = async () => {
-  $('scanBtn').disabled = true; $('scanBtn').textContent = 'Escaneando…';
-  try { await fetch('/api/scan', { method: 'POST' }); await load(); }
-  finally { $('scanBtn').disabled = false; $('scanBtn').textContent = 'Escanear ahora'; }
-};
-load();
-setInterval(load, 60000);
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleTimeString("en-US", {
+    hour: "numeric", minute: "2-digit", timeZone: "America/New_York",
+  });
+}
+
+function fmtNum(n, digits) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  return Number(n).toLocaleString(undefined, { maximumFractionDigits: digits ?? 0 });
+}
+
+function otmLabel(p) {
+  if (p.otm_pct == null) return "—";
+  const v = Number(p.otm_pct);
+  return `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+}
+
+function setStatus(text, mode) {
+  $("#status").textContent = text;
+  $("#live-dot").className = "dot " + (mode || (live ? "on" : "off"));
+}
+
+function filters() {
+  return {
+    side: ($("#f-side").value || "").toUpperCase(),
+    maxDte: $("#f-dte").value === "" ? null : Number($("#f-dte").value),
+    minOtm: $("#f-otm").value === "" ? null : Number($("#f-otm").value),
+    minPrem: Number($("#f-prem").value) || 0,
+  };
+}
+
+function matches(p, f) {
+  if (f.side && p.call_put !== f.side) return false;
+  if (f.maxDte != null && (p.dte == null || p.dte > f.maxDte)) return false;
+  if (f.minOtm != null && (p.otm_pct == null || p.otm_pct < f.minOtm)) return false;
+  if ((Number(p.premium) || 0) < f.minPrem) return false;
+  return true;
+}
+
+function span(cls, text) {
+  const el = document.createElement("span");
+  if (cls) el.className = cls;
+  el.textContent = text;
+  return el;
+}
+
+function renderFeed() {
+  const f = filters();
+  const feed = $("#feed");
+  const rows = (state?.prints || [])
+    .filter((p) => matches(p, f))
+    .sort((a, b) => new Date(b.first_seen || 0) - new Date(a.first_seen || 0))
+    .slice(0, 150);
+  feed.textContent = "";
+  $("#feed-count").textContent = `${rows.length}`;
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = (state?.prints || []).length ? "Sin coincidencias" : "Esperando flujo…";
+    feed.appendChild(empty);
+    return;
+  }
+  for (const p of rows) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.appendChild(span("time", fmtTime(p.first_seen)));
+    row.appendChild(span("sym", "MU"));
+    row.appendChild(span("", Number(p.strike).toFixed(0)));
+    row.appendChild(span(`cp ${p.call_put}`, String(p.call_put ?? "")));
+    row.appendChild(span("otm", otmLabel(p)));
+    row.appendChild(span("ia inst", p.conviction != null ? String(p.conviction) : "—"));
+    const flags = document.createElement("span");
+    flags.className = "flags";
+    if (p.is_new_position) {
+      const el = document.createElement("i");
+      el.className = "flag";
+      el.textContent = "NUEVA";
+      flags.appendChild(el);
+    }
+    if (p.sweep) {
+      const el = document.createElement("i");
+      el.className = "flag combo";
+      el.textContent = "BARRIDO";
+      flags.appendChild(el);
+    }
+    if (p.side === "buy" || p.side === "sell") {
+      const el = document.createElement("i");
+      el.className = "flag";
+      el.textContent = p.side === "buy" ? "COMPRA" : "VENTA";
+      flags.appendChild(el);
+    }
+    if (!flags.hasChildNodes()) flags.textContent = "—";
+    row.appendChild(flags);
+    row.appendChild(span("", p.dte == null ? "—" : String(p.dte)));
+    row.appendChild(span("prem", money(p.premium)));
+    feed.appendChild(row);
+  }
+}
+
+function renderCampaigns() {
+  const list = $("#camp-list");
+  list.textContent = "";
+  const camps = state?.campaigns || [];
+  $("#camp-count").textContent = `${camps.length}`;
+  if (!camps.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "Sin campañas activas";
+    list.appendChild(empty);
+    return;
+  }
+  for (const c of camps) {
+    const row = document.createElement("div");
+    row.className = "camp";
+    const left = document.createElement("span");
+    left.textContent =
+      `${c.call_put} ${Number(c.strike).toFixed(0)} · ${c.n_prints} prints · ${money(c.total_premium)} · ${fmtTime(c.first_seen)}→${fmtTime(c.last_seen)}`;
+    const right = document.createElement("span");
+    right.className = "conv";
+    right.textContent = c.label || "";
+    row.appendChild(left);
+    row.appendChild(right);
+    list.appendChild(row);
+  }
+}
+
+function renderHero() {
+  const v = state?.verdict;
+  const dirMap = { ALCISTA: "BULLISH", BAJISTA: "BEARISH", NEUTRAL: "NEUTRAL" };
+  const dirClass = (v && dirMap[v.direction]) || "NEUTRAL";
+  $(".signal").className = "signal " + dirClass;
+  const dirEl = $("#v-dir");
+  dirEl.textContent =
+    dirClass === "BULLISH" ? "▲ Alcista" : dirClass === "BEARISH" ? "▼ Bajista" : "● Sin señal";
+  dirEl.className = "dir " + dirClass;
+
+  $("#v-state-title").textContent = v?.headline || "—";
+  $("#v-state-detail").textContent = v?.evidence || "";
+  const badge = $("#v-state-badge");
+  const nSweeps = state?.sweeps_today || 0;
+  badge.textContent =
+    v ? `${v.direction} · ${v.n_prints || 0} prints${nSweeps ? ` · ${nSweeps} en barridos` : ""}` : "—";
+  badge.className = "pill " + (dirClass === "BULLISH" ? "aligned" : dirClass === "BEARISH" ? "noisy" : "");
+
+  const dots = v?.stage_dots || 0;
+  [...$("#v-stage-track").querySelectorAll("i")].forEach((el, i) => {
+    el.classList.toggle("on", dirClass !== "NEUTRAL" && i < dots);
+  });
+  $("#v-stage-label").textContent =
+    v ? `${v.stage_label || "—"}${dirClass !== "NEUTRAL" ? ` · ${v.streak || 1} scans` : ""}` : "—";
+
+  const hasPrints = (v?.n_prints || 0) > 0;
+  $("#v-conf-num").textContent = hasPrints ? String(v.confidence) : "—";
+  $("#v-conf-bar").style.width = hasPrints ? `${Math.max(0, Math.min(100, v.confidence || 0))}%` : "0%";
+  $("#v-conf-label").textContent =
+    !hasPrints ? "—" : v.confidence >= 70 ? "Alta" : v.confidence >= 40 ? "Media" : "Baja";
+
+  $("#v-price").textContent =
+    state?.spot == null ? "—" : Number(state.spot).toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+  const inv = v?.invalidation;
+  $("#v-inv-price").textContent = inv ? fmtNum(inv.price) : "—";
+  const arrow = $("#v-inv-arrow");
+  arrow.textContent = inv ? (inv.arrow === "up" ? "↑" : "↓") : "";
+  arrow.className = "inv-arrow " + (inv?.arrow || "");
+
+  const checksEl = $("#v-checks");
+  checksEl.textContent = "";
+  const b = state?.book;
+  const chips = [];
+  if ((v?.n_voted || 0) > 0) chips.push([true, `✓ ${v.n_voted} prints con sesgo`]);
+  if ((b?.new_position_premium || 0) > 0)
+    chips.push([true, `✓ Posición nueva ${money(b.new_position_premium)}`]);
+  if (nSweeps > 0) chips.push([true, `✓ ${nSweeps} prints en barridos`]);
+  if (v && dirClass !== "NEUTRAL") chips.push([true, `✓ Neto ponderado ${money(v.net)}`]);
+  if (!chips.length) chips.push([false, "Sin evidencia todavía"]);
+  for (const [ok, label] of chips) {
+    const chip = document.createElement("span");
+    chip.className = "check" + (ok ? " on" : "");
+    chip.textContent = label;
+    checksEl.appendChild(chip);
+  }
+  $("#v-conf-note").textContent = v
+    ? `Neto ponderado por convicción: ${money(v.net)} (sin ponderar ${money(v.net_unweighted)}) · ${v.n_prints || 0} prints, ${v.n_voted || 0} con sesgo.`
+    : "";
+
+  if (inv && state?.levels) {
+    const dist = inv.distance_pct >= 0 ? `+${inv.distance_pct}%` : `${inv.distance_pct}%`;
+    $("#v-inv-detail").textContent =
+      `${inv.reason} · a ${dist} del spot · horizonte: vencimiento semanal ${state.levels.expiry}`;
+  } else {
+    $("#v-inv-detail").textContent = "";
+  }
+
+  const status = $("#vec-status");
+  const src = (state?.source || "none").toUpperCase();
+  if (src === "NONE") {
+    status.textContent = "SIN DATOS";
+    status.className = "status-chip warn";
+  } else {
+    status.textContent = `${src} · ${state.market_open ? "MERCADO ABIERTO" : "MERCADO CERRADO"}`;
+    status.className = "status-chip" + (state.market_open ? " ok" : " warn");
+  }
+
+  const ts = state?.updated_at ? new Date(state.updated_at) : null;
+  $("#vec-updated").textContent =
+    ts && !Number.isNaN(ts.getTime()) ? `LAST UPDATED ${ts.toLocaleString()}` : "LAST UPDATED —";
+}
+
+function renderBook() {
+  const b = state?.book;
+  if (!b) return;
+  const netEl = $("#book-net");
+  netEl.textContent = `${b.net >= 0 ? "+" : "−"}${money(Math.abs(b.net))}`;
+  netEl.className = b.net >= 0 ? "up" : "down";
+  $("#book-split").textContent = `calls ${money(b.call_premium)} · puts ${money(b.put_premium)}`;
+  const fmtK = (n) => (n == null ? "—" : Number(n).toFixed(0));
+  $("#book-avg").textContent = fmtK(b.avg_strike);
+  $("#book-avg-split").textContent = `calls ${fmtK(b.call_avg_strike)} · puts ${fmtK(b.put_avg_strike)}`;
+  $("#book-new").textContent = money(b.new_position_premium || 0);
+  $("#book-new-split").textContent = `${b.new_position_count || 0} prints`;
+  const ids = [["#book-dte1", "#book-dte1s"], ["#book-dte2", "#book-dte2s"], ["#book-dte3", "#book-dte3s"]];
+  ["0-7", "8-21", "22-45"].forEach((name, i) => {
+    const bk = (b.dte_buckets || {})[name] || {};
+    const [vId, sId] = ids[i];
+    if (!bk.total) {
+      $(vId).textContent = "—";
+      $(sId).textContent = "—";
+      return;
+    }
+    $(vId).textContent = money(bk.total);
+    $(sId).textContent = `C ${bk.call_share != null ? Math.round(bk.call_share * 100) + "%" : "—"}`;
+  });
+}
+
+function renderLevels() {
+  const lv = state?.levels;
+  if (!lv) {
+    for (const id of ["#lv-call-wall", "#lv-put-wall", "#lv-maxpain"]) $(id).textContent = "—";
+    return;
+  }
+  $("#lv-call-wall").textContent = fmtNum(lv.call_wall.strike);
+  $("#lv-put-wall").textContent = fmtNum(lv.put_wall.strike);
+  $("#lv-maxpain").textContent = fmtNum(lv.max_pain.strike);
+  $("#lv-maxpain-exp").textContent = lv.expiry || "—";
+  const nSweeps = state?.sweeps_today || 0;
+  $("#lv-sweeps").textContent = String(nSweeps);
+  const sweepPrem = (state?.prints || []).filter((p) => p.sweep)
+    .reduce((acc, p) => acc + (p.premium || 0), 0);
+  $("#lv-sweeps-detail").textContent = nSweeps ? money(sweepPrem) : "—";
+}
+
+function renderTargets() {
+  const t = state?.targets || {};
+  const fmt = (lv) => (lv ? fmtNum(lv.strike) : "—");
+  const det = (lv) => (lv ? `${money(lv.premium)} · ${lv.n_prints} prints` : "—");
+  $("#tg-bull").textContent = fmt(t.bull);
+  $("#tg-bull-detail").textContent = det(t.bull);
+  $("#tg-bear").textContent = fmt(t.bear);
+  $("#tg-bear-detail").textContent = det(t.bear);
+  $("#tg-hedge").textContent = fmt(t.hedge);
+  $("#tg-hedge-detail").textContent = t.hedge ? `OI ${Number(t.hedge.oi).toLocaleString()}` : "—";
+}
+
+function renderAll() {
+  renderHero();
+  renderBook();
+  renderLevels();
+  renderTargets();
+  renderCampaigns();
+  renderFeed();
+}
+
+async function load(scanning) {
+  try {
+    const r = await fetch("/api/state");
+    state = await r.json();
+    renderAll();
+    if (state.error && !(state.prints || []).length) {
+      setStatus(state.error, "off");
+    } else if (scanning) {
+      setStatus("escaneando…", "scan");
+    } else if (!state.market_open) {
+      setStatus("mercado cerrado · sin auto-scan", "off");
+    } else if (live) {
+      setStatus("en vivo · 10s", "on");
+    } else {
+      setStatus("pausado", "off");
+    }
+  } catch (e) {
+    setStatus(String(e.message || e), "off");
+  }
+}
+
+let refreshing = false;
+async function refreshAll() {
+  if (refreshing) return;
+  refreshing = true;
+  try { await load(false); } finally { refreshing = false; }
+}
+
+$("#btn-live").addEventListener("click", () => {
+  live = !live;
+  $("#btn-live").classList.toggle("on", live);
+  setStatus(live ? "en vivo · 10s" : "pausado", live ? "on" : "off");
+});
+
+$("#btn-scan").addEventListener("click", async () => {
+  try {
+    setStatus("escaneando…", "scan");
+    await fetch("/api/scan", { method: "POST" });
+    await load(false);
+  } catch (e) {
+    setStatus(String(e.message || e), "off");
+  }
+});
+
+$("#f-und").addEventListener("change", renderFeed);
+for (const id of ["#f-side", "#f-dte", "#f-otm", "#f-prem"]) {
+  $(id).addEventListener("change", renderFeed);
+}
+
+$("#btn-howto").addEventListener("click", () => $("#howto-modal").showModal());
+
+load(false).catch((e) => setStatus(String(e.message || e), "off"));
+setInterval(() => { if (live) refreshAll().catch(() => {}); }, 10000);
 </script>
 </body>
 </html>

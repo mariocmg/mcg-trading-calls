@@ -18,11 +18,21 @@ def cmd_scan() -> int:
     print(f"MU  spot ${state['spot']}" if state["spot"] else "MU  spot ?")
     print(f"{v['direction']} — {v['headline']}")
     print(v["evidence"])
-    print(f"Neto con sesgo: ${v['net']:,}")
+    print(f"Neto ponderado por convicción: ${v['net']:,} (sin ponderar ${v['net_unweighted']:,})")
+    print(f"Confianza {v['confidence']} · etapa {v['stage_label']} · streak {v['streak']} scans")
     for p in state["prints"]:
+        flags = [
+            s
+            for s, on in (
+                ("NUEVA", p.get("is_new_position")),
+                ("BARRIDO", p.get("sweep")),
+            )
+            if on
+        ]
         print(
             f"  {p['call_put']} {p['strike']:g} {p['expiry']} {p['side']:7} "
-            f"prima ${p['premium']:,}  Δvol {p['delta_vol']}  vol/OI {p['volume']}/{p['open_interest']}"
+            f"prima ${p['premium']:,}  Δvol {p['delta_vol']}  vol/OI {p['volume']}/{p['open_interest']}  "
+            f"dOI {p.get('d_oi')}  conv {p.get('conviction')}  {' '.join(flags)}"
         )
     if state["levels"]:
         lv = state["levels"]

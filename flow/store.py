@@ -1,10 +1,17 @@
 """Persistencia mínima: JSON planos en data/. Sin SQLite, sin .pkl.
 
-- snapshot.json: {fecha_sesion_ET, volumes: {contrato: volumen}} del último scan.
-  Sirve para calcular el Δvolumen del siguiente scan.
-- prints.json: {fecha_sesion_ET, prints: [...]} acumulados del día.
+- snapshot.json: {fecha_sesion_ET, volumes: {contrato: volumen},
+  oi: {contrato: open_interest}} del último scan. Sirve para el Δvolumen
+  y el ΔOI del siguiente scan. El OI se compara incluso entre días
+  distintos: el OI intradía de las cadenas delayed suele ser el del cierre
+  anterior, así que el ΔOI del primer scan del día mide el cambio de
+  posición de la noche (lo que se abrió/cerró entre sesiones).
+- prints.json: {fecha_sesion_ET, prints: [...]} acumulados del día. Cada
+  print acumula sus reapariciones en scans posteriores (times_seen,
+  first_seen, last_seen, prima y Δvolumen sumados).
 - state.json: último estado completo que sirve la web (veredicto, prints,
-  niveles, spot, fuente, hora). La web lo lee sin esperar a un scan.
+  niveles, book, targets, campañas, spot, fuente, hora). La web lo lee
+  sin esperar a un scan.
 """
 
 from __future__ import annotations
@@ -24,6 +31,11 @@ def session_date() -> str:
     return datetime.now(ET).date().isoformat()
 
 
+def now_iso_et() -> str:
+    """Ahora en America/New_York, ISO (para first_seen / last_seen)."""
+    return datetime.now(ET).isoformat()
+
+
 def _read(name: str) -> dict[str, Any]:
     path = DATA_DIR / name
     try:
@@ -39,15 +51,23 @@ def _write(name: str, payload: dict[str, Any]) -> None:
     tmp.replace(DATA_DIR / name)
 
 
-def load_snapshot() -> tuple[str | None, dict[str, int]]:
-    """(fecha, volumes) del snapshot anterior. Vacío si no existe."""
+def load_snapshot() -> tuple[str | None, dict[str, int], dict[str, int]]:
+    """(fecha, volumes, oi) del snapshot anterior. Vacío si no existe.
+
+    Compatible con snapshots viejos sin clave "oi" (devuelven {}).
+    """
     data = _read("snapshot.json")
     volumes = data.get("volumes") or {}
-    return data.get("date"), {k: int(v) for k, v in volumes.items()}
+    oi = data.get("oi") or {}
+    return (
+        data.get("date"),
+        {k: int(v) for k, v in volumes.items()},
+        {k: int(v) for k, v in oi.items()},
+    )
 
 
-def save_snapshot(date: str, volumes: dict[str, int]) -> None:
-    _write("snapshot.json", {"date": date, "volumes": volumes})
+def save_snapshot(date: str, volumes: dict[str, int], oi: dict[str, int]) -> None:
+    _write("snapshot.json", {"date": date, "volumes": volumes, "oi": oi})
 
 
 def load_day_prints() -> tuple[str | None, list[dict[str, Any]]]:
