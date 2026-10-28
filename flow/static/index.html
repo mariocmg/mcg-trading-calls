@@ -1,265 +1,104 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>FLOW · MU</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/styles.css?v=8" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FLOW — MU</title>
+<style>
+  * { box-sizing: border-box; }
+  body { background: #0a0e14; color: #e6edf3; font-family: system-ui, sans-serif;
+         margin: 0 auto; max-width: 900px; padding: 24px 16px 64px; }
+  header { display: flex; justify-content: space-between; align-items: baseline; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: 2px; }
+  #meta { color: #8b949e; font-size: 13px; }
+  h2 { font-size: 13px; letter-spacing: 2px; color: #8b949e; margin: 32px 0 12px; }
+  #direction { font-size: 44px; font-weight: 800; margin: 8px 0 4px; }
+  #direction.ALCISTA { color: #3fb950; }
+  #direction.BAJISTA { color: #f85149; }
+  #direction.NEUTRAL { color: #d29922; }
+  #headline { font-size: 20px; margin: 0 0 6px; }
+  #evidence { color: #c9d1d9; margin: 0; }
+  #net { color: #8b949e; font-size: 14px; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; color: #8b949e; font-weight: 600; border-bottom: 1px solid #30363d; padding: 6px 8px 6px 0; }
+  td { border-bottom: 1px solid #21262d; padding: 7px 8px 7px 0; }
+  .buy { color: #3fb950; } .sell { color: #f85149; } .unknown { color: #8b949e; }
+  .levels { font-size: 18px; line-height: 1.9; }
+  .levels b { font-size: 22px; }
+  .levels .lbl { color: #8b949e; font-size: 14px; }
+  button { background: #21262d; color: #e6edf3; border: 1px solid #30363d;
+           border-radius: 6px; padding: 8px 14px; cursor: pointer; font-size: 14px; }
+  button:hover { background: #30363d; }
+  #error { color: #f85149; }
+  .empty { color: #8b949e; }
+</style>
 </head>
 <body>
-  <header class="chrome-bar">
-    <div class="chrome" aria-label="Estado">
-      <span id="live-dot" class="dot off"></span>
-      <span id="status" class="status">conectando…</span>
-      <button type="button" id="btn-live" class="btn text on">LIVE</button>
-      <button type="button" id="btn-scan" class="btn">Actualizar</button>
-    </div>
-  </header>
+<header>
+  <h1>FLOW · MU</h1>
+  <span id="meta"></span>
+</header>
 
-  <div class="app">
-    <section class="signal">
-      <div class="signal-top">
-        <div class="sym-block">
-          <label class="mini">Ticker</label>
-          <select id="f-und" class="sym-select">
-            <option value="MU" selected>MU</option>
-            <option value="">ALL</option>
-          </select>
-          <div id="vec-status" class="status-chip warn">DEGRADED</div>
-        </div>
-        <button type="button" id="btn-howto" class="linkish">¿Cómo se calcula?</button>
-      </div>
+<h2>VEREDICTO</h2>
+<div id="direction">—</div>
+<p id="headline"></p>
+<p id="evidence"></p>
+<p id="net"></p>
+<p id="error"></p>
 
-      <div id="vector-row" class="signal-body">
-        <div class="dir-block">
-          <div id="v-dir" class="dir">—</div>
-          <div id="v-state-title" class="state-main">—</div>
-          <p id="v-state-detail" class="state-sub">—</p>
-          <span id="v-state-badge" class="pill">—</span>
-        </div>
+<h2>PRINTS INUSUALES DEL DÍA</h2>
+<table>
+  <thead><tr><th>Strike</th><th>Vto.</th><th>C/P</th><th>Prima</th><th>Vol / OI</th><th>Sesgo</th></tr></thead>
+  <tbody id="prints"></tbody>
+</table>
 
-        <div class="stats">
-          <div class="stat">
-            <span class="mini">Etapa</span>
-            <div class="stage-track" id="v-stage-track"><i></i><i></i><i></i></div>
-            <strong id="v-stage-label">—</strong>
-          </div>
-          <div class="stat">
-            <span class="mini">Confianza</span>
-            <strong id="v-conf-num" class="conf">—</strong>
-            <div class="conf-bar"><i id="v-conf-bar"></i></div>
-            <span id="v-conf-label" class="mini">—</span>
-          </div>
-          <div class="stat">
-            <span class="mini">Precio</span>
-            <strong id="v-price" class="num">—</strong>
-          </div>
-          <div class="stat">
-            <span class="mini">Invalidación</span>
-            <strong class="num inv">
-              <span id="v-inv-price">—</span>
-              <span id="v-inv-arrow" class="inv-arrow"></span>
-            </strong>
-          </div>
-        </div>
-      </div>
+<h2>NIVELES — VENCIMIENTO SEMANAL</h2>
+<div class="levels" id="levels"></div>
 
-      <p id="vec-updated" class="updated">LAST UPDATED —</p>
-      <span id="v-sym" class="sr-only">MU</span>
+<p style="margin-top:32px"><button id="scanBtn">Escanear ahora</button></p>
 
-      <div class="checks-wrap">
-        <span class="mini">Evidencia</span>
-        <div id="v-checks" class="checks"></div>
-        <p id="v-conf-note" class="conf-note"></p>
-      </div>
-      <p id="v-inv-detail" class="inv-detail"></p>
-    </section>
+<script>
+const $ = id => document.getElementById(id);
+const money = n => '$' + n.toLocaleString('en-US');
+const sideLabel = s => ({ buy: 'COMPRA', sell: 'VENTA', unknown: '?' }[s] || s);
+const sideClass = s => ({ buy: 'buy', sell: 'sell', unknown: 'unknown' }[s] || '');
 
-    <section class="book" id="book">
-      <div>
-        <span class="mini">Premium sesión</span>
-        <strong id="book-net">—</strong>
-        <span id="book-split" class="mini">calls — · puts —</span>
-      </div>
-      <div>
-        <span class="mini">Precio medio</span>
-        <strong id="book-avg">—</strong>
-        <span id="book-avg-split" class="mini">calls — · puts —</span>
-      </div>
-      <div>
-        <span class="mini">Gamma neta</span>
-        <strong id="book-gex">—</strong>
-        <span class="mini">calls + · puts −</span>
-      </div>
-      <div>
-        <span class="mini">DTE 0–7</span>
-        <strong id="book-dte1" class="num">—</strong>
-        <span id="book-dte1s" class="mini">—</span>
-      </div>
-      <div>
-        <span class="mini">DTE 8–21</span>
-        <strong id="book-dte2" class="num">—</strong>
-        <span id="book-dte2s" class="mini">—</span>
-      </div>
-      <div>
-        <span class="mini">DTE 22–45</span>
-        <strong id="book-dte3" class="num">—</strong>
-        <span id="book-dte3s" class="mini">—</span>
-      </div>
-    </section>
-
-    <section class="levels" id="levels">
-      <div>
-        <span class="mini">Muro call (resistencia)</span>
-        <strong id="lv-call-wall" class="num">—</strong>
-      </div>
-      <div>
-        <span class="mini">Muro put (soporte)</span>
-        <strong id="lv-put-wall" class="num">—</strong>
-      </div>
-      <div>
-        <span class="mini">Gamma flip</span>
-        <strong id="lv-flip" class="num">—</strong>
-      </div>
-      <div>
-        <span class="mini">Max pain</span>
-        <strong id="lv-maxpain" class="num">—</strong>
-        <span id="lv-maxpain-exp" class="mini">—</span>
-      </div>
-      <div>
-        <span class="mini">Régimen gamma</span>
-        <strong id="lv-regime" class="num">—</strong>
-        <span id="lv-regime-read" class="mini">—</span>
-      </div>
-      <div>
-        <span class="mini">Combos desk</span>
-        <strong id="lv-combos" class="num">—</strong>
-        <span id="lv-combos-detail" class="mini">—</span>
-      </div>
-    </section>
-
-    <section class="levels" id="targets">
-      <div>
-        <span class="mini">🎯 Calls buscan</span>
-        <strong id="tg-bull" class="num">—</strong>
-        <span id="tg-bull-detail" class="mini">—</span>
-      </div>
-      <div>
-        <span class="mini">🔻 Puts buscan</span>
-        <strong id="tg-bear" class="num">—</strong>
-        <span id="tg-bear-detail" class="mini">—</span>
-      </div>
-      <div>
-        <span class="mini">🛡 Cobertura en</span>
-        <strong id="tg-hedge" class="num">—</strong>
-        <span id="tg-hedge-detail" class="mini">—</span>
-      </div>
-    </section>
-
-    <section class="campaigns" id="campaigns">
-      <div class="tape-head">
-        <div>
-          <h2>Campañas de acumulación</h2>
-          <p class="hint">Prints enlazados por contrato a través de scans</p>
-        </div>
-        <span id="camp-count" class="count">0</span>
-      </div>
-      <div id="camp-list" class="camp-list"></div>
-    </section>
-
-    <section class="tape-wrap">
-      <div class="tape-head">
-        <div>
-          <h2>Calls / Puts institucionales</h2>
-          <p class="hint">Solo flujo que la IA marca como desk / hedge (no retail)</p>
-        </div>
-        <span id="feed-count" class="count">0</span>
-      </div>
-
-      <div class="filters" id="filters">
-        <label>
-          <span>Lado</span>
-          <select id="f-side">
-            <option value="">Todos</option>
-            <option value="C">Calls</option>
-            <option value="P">Puts</option>
-          </select>
-        </label>
-        <label>
-          <span>DTE</span>
-          <select id="f-dte">
-            <option value="">Cualquiera</option>
-            <option value="7">≤ 7</option>
-            <option value="14">≤ 14</option>
-            <option value="30">≤ 30</option>
-            <option value="45">≤ 45</option>
-          </select>
-        </label>
-        <label>
-          <span>OTM</span>
-          <select id="f-otm">
-            <option value="">Cualquiera</option>
-            <option value="0">Solo OTM</option>
-            <option value="5">≥ 5%</option>
-            <option value="10">≥ 10%</option>
-          </select>
-        </label>
-        <label>
-          <span>Premium mín.</span>
-          <select id="f-prem">
-            <option value="0">Cualquiera</option>
-            <option value="50000">$50K</option>
-            <option value="100000">$100K</option>
-            <option value="250000">$250K</option>
-            <option value="500000">$500K</option>
-          </select>
-        </label>
-      </div>
-
-      <div class="tape">
-        <div class="tape-cols" aria-hidden="true">
-          <span>Hora</span>
-          <span>Ticker</span>
-          <span>Strike</span>
-          <span>C/P</span>
-          <span>OTM</span>
-          <span>IA</span>
-          <span>Flags</span>
-          <span>DTE</span>
-          <span>Premium</span>
-        </div>
-        <div id="feed" class="feed"></div>
-      </div>
-    </section>
-  </div>
-
-  <dialog id="howto-modal" class="modal">
-    <form method="dialog" class="modal-card">
-      <h3>Cómo se calcula</h3>
-      <ul>
-        <li><strong>Score</strong> — modelo GradientBoosting (22 features: tamaño, vol/OI, urgencia, IV, volumen relativo, hora del día…) entrenado con outcomes reales 1–5d cuando hay ≥80; si no, bootstrap sintético (se avisa).</li>
-        <li><strong>Combos</strong> — risk reversals, spreads, collars y strangles detectados entre prints del mismo vencimiento; suman bonus al score.</li>
-        <li><strong>Blocks</strong> — salto de volumen ≥3× el histórico del contrato (mín. 500) en un scan.</li>
-        <li><strong>Precio medio</strong> — strike ponderado por premium de la sesión: a qué nivel se posicionan calls y puts.</li>
-        <li><strong>Niveles</strong> — muros de OI (call = resistencia, put = soporte), gamma flip y max pain por vencimiento.</li>
-        <li><strong>Niveles que buscan</strong> — dónde va la prima institucional: 🎯 strikes donde compran calls (objetivo alcista), 🔻 donde compran puts (objetivo bajista), 🛡 donde pagan cobertura. Es flujo de hoy, no OI acumulado.</li>
-        <li><strong>Dirección</strong> — residual del flow institucional (tras descontar hedges) + confirmación de precio. Sin tape RTH → Sin señal.</li>
-        <li><strong>Etapa</strong> — checklist de 5 evidencias (flujo, precio, persistencia, gamma, estructura): 0–1 Early, 2–3 Building, 4–5 Confirmed.</li>
-        <li><strong>Confianza</strong> — evidencia calibrada con el hit-rate real de setups pasados (si hay ≥20); si no, heurística. LOW ≈ cara o cruz.</li>
-        <li><strong>Invalidación</strong> — muro OI opuesto más cercano (si está a ≤5%) o swing 10d ± 1.5×ATR, más horizonte temporal del vencimiento con más OI.</li>
-        <li><strong>Campañas</strong> — prints del mismo contrato enlazados a través de scans: acumulación real, no alertas sueltas.</li>
-        <li><strong>Side con incertidumbre</strong> — el bias buy/sell lleva confianza (horquilla estrecha + print pegado al bid/ask = fuerte); el modelo lo pesa en continuo, no binario.</li>
-        <li><strong>Régimen gamma</strong> — long-gamma: los muros sujetan (reversión); short-gamma: las rupturas aceleran. Condiciona la tesis direccional.</li>
-        <li><strong>Calidad</strong> — un scan con cadena stale o glitch se guarda marcado pero no emite alertas.</li>
-        <li><strong>Outcomes</strong> — el movimiento se mide ajustado por beta (SPY) y normalizado por ATR, con horizonte según DTE (1d para 0–7 DTE … 5d para >45); también se guarda si el OI siguió creciendo (acumulación).</li>
-      </ul>
-      <button type="submit" class="btn solid">Entendido</button>
-    </form>
-  </dialog>
-
-  <script src="/static/app.js?v=8"></script>
+async function load() {
+  try {
+    const s = await (await fetch('/api/state')).json();
+    if (s.error && !s.verdict) { $('error').textContent = s.error; return; }
+    $('meta').textContent = (s.spot ? 'MU $' + s.spot : '') +
+      ' · ' + (s.source || '') + ' · ' +
+      (s.market_open ? 'mercado abierto' : 'mercado cerrado') +
+      (s.updated_at ? ' · ' + new Date(s.updated_at).toLocaleTimeString() : '');
+    const v = s.verdict;
+    $('direction').textContent = v.direction;
+    $('direction').className = v.direction;
+    $('headline').textContent = v.headline;
+    $('evidence').textContent = v.evidence;
+    $('net').textContent = 'Neto con sesgo: ' + money(v.net) + ' $';
+    $('error').textContent = s.error || '';
+    $('prints').innerHTML = (s.prints || []).map(p =>
+      `<tr><td>${p.strike}</td><td>${p.expiry}</td><td>${p.call_put}</td>` +
+      `<td>${money(p.premium)}</td><td>${p.volume} / ${p.open_interest}</td>` +
+      `<td class="${sideClass(p.side)}">${sideLabel(p.side)}</td></tr>`).join('') ||
+      '<tr><td colspan="6" class="empty">Sin prints inusuales todavía.</td></tr>';
+    const lv = s.levels;
+    $('levels').innerHTML = lv
+      ? `<div><span class="lbl">Vencimiento</span> ${lv.expiry}</div>` +
+        `<div><span class="lbl">Muro call (resistencia)</span> <b>${lv.call_wall.strike}</b> <span class="lbl">OI ${lv.call_wall.oi.toLocaleString()}</span></div>` +
+        `<div><span class="lbl">Muro put (soporte)</span> <b>${lv.put_wall.strike}</b> <span class="lbl">OI ${lv.put_wall.oi.toLocaleString()}</span></div>` +
+        `<div><span class="lbl">Max pain</span> <b>${lv.max_pain.strike}</b></div>`
+      : '<span class="empty">Sin niveles todavía.</span>';
+  } catch (e) { $('error').textContent = 'No se pudo cargar el estado: ' + e; }
+}
+$('scanBtn').onclick = async () => {
+  $('scanBtn').disabled = true; $('scanBtn').textContent = 'Escaneando…';
+  try { await fetch('/api/scan', { method: 'POST' }); await load(); }
+  finally { $('scanBtn').disabled = false; $('scanBtn').textContent = 'Escanear ahora'; }
+};
+load();
+setInterval(load, 60000);
+</script>
 </body>
 </html>

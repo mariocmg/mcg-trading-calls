@@ -1,12 +1,6 @@
-# Pinned 2026-10-19 (resolved together with pip; Python 3.13 target).
-yfinance==1.7.0
-pandas==3.0.6
-rich==15.0.0
-typer==0.27.3
-pyyaml==6.0.3
+# Solo lo que hace falta para servir la web y el fallback Yahoo.
 fastapi==0.148.0
 uvicorn[standard]==0.54.0
-scikit-learn==1.9.1
-numpy==2.5.4
-joblib==1.6.0
+yfinance==1.7.0
+pandas==3.0.6
 pytest==9.1.1

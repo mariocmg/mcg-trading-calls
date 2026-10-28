@@ -22,21 +22,21 @@ if not exist ".venv\Scripts\python.exe" (
     pause
     exit /b 1
   )
-  echo Instalando dependencias...
-  ".venv\Scripts\python.exe" -m pip install --upgrade pip
-  ".venv\Scripts\python.exe" -m pip install -r requirements.txt
-  if errorlevel 1 (
-    echo Fallo la instalacion de dependencias.
-    pause
-    exit /b 1
-  )
+)
+
+echo Instalando dependencias...
+".venv\Scripts\python.exe" -m pip install -q -r requirements.txt
+if errorlevel 1 (
+  echo Fallo la instalacion de dependencias.
+  pause
+  exit /b 1
 )
 
 call :ready
 if not errorlevel 1 goto open
 
 echo Levantando servidor...
-start "FLOW" /D "%~dp0." "%~dp0.venv\Scripts\python.exe" -m flow.web
+start "FLOW" /D "%~dp0." "%~dp0.venv\Scripts\python.exe" -m flow
 
 echo Esperando a que la pagina responda...
 set /a tries=0
