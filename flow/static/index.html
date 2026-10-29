@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FLOW · Posicionamiento Institucional IA</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css?v=10" />
+</head>
+<body>
+  <header class="chrome-bar">
+    <div class="brand">
+      <span class="brand-badge">FLOW AI</span>
+      <span class="brand-sub">Vector · Lattice · Pulse</span>
+    </div>
+    <div class="chrome" aria-label="Estado">
+      <span id="live-dot" class="dot off"></span>
+      <span id="status" class="status">conectando…</span>
+      <button type="button" id="btn-live" class="btn text on">LIVE</button>
+      <button type="button" id="btn-scan" class="btn">Actualizar</button>
+    </div>
+  </header>
+
+  <div class="app">
+    <!-- 1. VECTOR HERO: Veredicto + Hacia dónde apuntan las instituciones -->
+    <section class="signal NEUTRAL">
+      <div class="signal-top">
+        <div class="sym-block">
+          <div>
+            <label class="mini" for="f-und">Ticker</label>
+            <div class="ticker-controls">
+              <select id="f-und" class="sym-select">
+                <option value="MU" selected>MU</option>
+                <option value="NVDA">NVDA</option>
+                <option value="TSLA">TSLA</option>
+                <option value="SPY">SPY</option>
+                <option value="QQQ">QQQ</option>
+                <option value="AMD">AMD</option>
+                <option value="AAPL">AAPL</option>
+                <option value="META">META</option>
+                <option value="AMZN">AMZN</option>
+                <option value="MSFT">MSFT</option>
+                <option value="PLTR">PLTR</option>
+              </select>
+              <form id="custom-ticker-form" class="custom-ticker-form">
+                <input type="text" id="custom-ticker" placeholder="Otro (ej. SMCI)" maxlength="8" />
+                <button type="submit" class="btn mini-btn">Ir</button>
+              </form>
+            </div>
+          </div>
+          <div class="meta-pills">
+            <div id="vec-status" class="status-chip warn">—</div>
+            <div id="vec-action" class="action-chip">—</div>
+          </div>
+        </div>
+        <button type="button" id="btn-howto" class="linkish">¿Cómo funciona el Filtro IA?</button>
+      </div>
+
+      <div id="vector-row" class="signal-body">
+        <div class="dir-block">
+          <div id="v-dir" class="dir">—</div>
+          <div id="v-state-title" class="state-main">—</div>
+          <p id="v-state-detail" class="state-sub">—</p>
+          <p id="v-evidence" class="evidence-line">—</p>
+          <span id="v-state-badge" class="pill">—</span>
+        </div>
+
+        <div class="stats">
+          <div class="stat target-highlight">
+            <span class="mini">🎯 Hacia dónde apuntan (Imán IA)</span>
+            <strong id="v-target-price" class="num target-num">—</strong>
+            <span id="v-target-sub" class="mini target-sub">—</span>
+          </div>
+          <div class="stat">
+            <span class="mini">Precio Spot</span>
+            <strong id="v-price" class="num">—</strong>
+            <span id="v-price-sub" class="mini">—</span>
+          </div>
+          <div class="stat">
+            <span class="mini">Confianza IA</span>
+            <strong id="v-conf-num" class="conf">—</strong>
+            <div class="conf-bar"><i id="v-conf-bar"></i></div>
+            <span id="v-conf-label" class="mini">—</span>
+          </div>
+          <div class="stat">
+            <span class="mini">Etapa / Invalidación</span>
+            <div class="stage-track" id="v-stage-track"><i></i><i></i><i></i></div>
+            <strong id="v-stage-label" class="stage-text">—</strong>
+            <span class="mini inv-inline">
+              Invalida: <strong id="v-inv-price" class="num">—</strong>
+              <span id="v-inv-arrow" class="inv-arrow"></span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="checks-wrap">
+        <div id="v-checks" class="checks"></div>
+        <p id="v-conf-note" class="conf-note"></p>
+      </div>
+      <p id="v-inv-detail" class="inv-detail"></p>
+      <p id="vec-updated" class="updated">LAST UPDATED —</p>
+      <span id="v-sym" class="sr-only">MU</span>
+    </section>
+
+    <!-- 2. LATTICE MAP: Mapa visual simple de hacia dónde se posicionan -->
+    <section class="pos-map-card" id="positioning-map">
+      <div class="pos-map-head">
+        <div>
+          <h2>Mapa de Posicionamiento Institucional (Lattice)</h2>
+          <p class="hint" id="pos-map-subtitle">Dónde está el precio hoy, dónde defienden las instituciones y qué strike buscan</p>
+        </div>
+        <span id="gamma-badge" class="gamma-pill">—</span>
+      </div>
+
+      <div class="ladder-track-wrap">
+        <div class="ladder-track" id="ladder-track">
+          <div class="ladder-fill" id="ladder-fill"></div>
+        </div>
+        <div class="ladder-legend">
+          <span><i class="lg-dot support"></i> Suelo Put (Soporte)</span>
+          <span><i class="lg-dot spot"></i> Spot Actual</span>
+          <span><i class="lg-dot target"></i> Objetivo IA (Imán)</span>
+          <span><i class="lg-dot resistance"></i> Techo Call</span>
+        </div>
+      </div>
+
+      <div class="lattice-grid">
+        <div class="lat-box">
+          <span class="mini">🛡️ Suelo Institucional (Put Wall)</span>
+          <strong id="lv-put-wall" class="num down-floor">—</strong>
+          <span id="lv-put-wall-sub" class="mini">—</span>
+        </div>
+        <div class="lat-box highlight">
+          <span class="mini">🎯 Strike Objetivo (Flujo IA)</span>
+          <strong id="tg-bull" class="num">—</strong>
+          <span id="tg-bull-detail" class="mini">—</span>
+        </div>
+        <div class="lat-box">
+          <span class="mini">🧱 Techo / Muro Call</span>
+          <strong id="lv-call-wall" class="num">—</strong>
+          <span id="lv-call-wall-sub" class="mini">—</span>
+        </div>
+        <div class="lat-box">
+          <span class="mini">⚖️ Max Pain / Gamma Flip</span>
+          <strong id="lv-maxpain" class="num">—</strong>
+          <span id="lv-maxpain-exp" class="mini">—</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. RESUMEN DE FLUJO DE LA SESIÓN (BOOK) -->
+    <section class="book" id="book">
+      <div>
+        <span class="mini">Flujo Neto Sesión</span>
+        <strong id="book-net">—</strong>
+        <span id="book-split" class="mini">calls — · puts —</span>
+      </div>
+      <div>
+        <span class="mini">Exposición Delta ($)</span>
+        <strong id="book-delta" class="num">—</strong>
+        <span id="book-avg-split" class="mini">calls — · puts —</span>
+      </div>
+      <div>
+        <span class="mini">Aperturas Nuevas (ΔOI &gt; 0)</span>
+        <strong id="book-new">—</strong>
+        <span id="book-new-split" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">Corto Plazo (DTE 0–7)</span>
+        <strong id="book-dte1" class="num">—</strong>
+        <span id="book-dte1s" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">Swing (DTE 8–21)</span>
+        <strong id="book-dte2" class="num">—</strong>
+        <span id="book-dte2s" class="mini">—</span>
+      </div>
+      <div>
+        <span class="mini">Posicional (DTE 22–45)</span>
+        <strong id="book-dte3" class="num">—</strong>
+        <span id="book-dte3s" class="mini">—</span>
+      </div>
+    </section>
+
+    <!-- 4. CAMPAÑAS DE ACUMULACIÓN -->
+    <section class="campaigns" id="campaigns">
+      <div class="tape-head">
+        <div>
+          <h2>Campañas de acumulación repetida</h2>
+          <p class="hint">Contratos donde las instituciones vuelven a entrar en múltiples escaneos</p>
+        </div>
+        <span id="camp-count" class="count">0</span>
+      </div>
+      <div id="camp-list" class="camp-list"></div>
+    </section>
+
+    <!-- 5. PULSE BOARD: Tabla con Filtro IA -->
+    <section class="tape-wrap">
+      <div class="tape-head">
+        <div>
+          <h2>Pulse Board · Flujo Institucional</h2>
+          <p class="hint" id="pulse-summary">Clasificado por IA según agresión sobre precio teórico, Delta y ΔOI</p>
+        </div>
+        <div class="pulse-actions">
+          <button type="button" id="btn-ai-filter" class="ai-toggle on" aria-pressed="true">
+            🤖 Filtro IA: Solo Posicionamiento Real
+          </button>
+          <span id="feed-count" class="count">0</span>
+        </div>
+      </div>
+
+      <div class="filters" id="filters">
+        <label>
+          <span>Intención IA</span>
+          <select id="f-intent">
+            <option value="">Todas las intenciones</option>
+            <option value="WHALE">🐋 Solo Ballenas (Whale)</option>
+            <option value="DIRECTIONAL">🎯 Aperturas Direccionales</option>
+            <option value="INCOME">💰 Venta de Prima (Suelo/Techo)</option>
+            <option value="HEDGE">🛡️ Coberturas (Hedge)</option>
+          </select>
+        </label>
+        <label>
+          <span>Lado</span>
+          <select id="f-side">
+            <option value="">Todos (Calls + Puts)</option>
+            <option value="C">Solo Calls</option>
+            <option value="P">Solo Puts</option>
+          </select>
+        </label>
+        <label>
+          <span>DTE (Vencimiento)</span>
+          <select id="f-dte">
+            <option value="">Cualquiera (≤ 45d)</option>
+            <option value="7">Semanal (≤ 7d)</option>
+            <option value="14">≤ 14 días</option>
+            <option value="30">≤ 30 días</option>
+          </select>
+        </label>
+        <label>
+          <span>OTM</span>
+          <select id="f-otm">
+            <option value="">Cualquiera</option>
+            <option value="0">Solo fuera de dinero (OTM)</option>
+            <option value="3">≥ +3% OTM</option>
+            <option value="7">≥ +7% OTM</option>
+          </select>
+        </label>
+        <label>
+          <span>Prima mínima</span>
+          <select id="f-prem">
+            <option value="0">Desde $50K</option>
+            <option value="100000">≥ $100K</option>
+            <option value="250000">≥ $250K</option>
+            <option value="500000">≥ $500K</option>
+            <option value="1000000">≥ $1M</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="tape">
+        <div class="tape-cols" aria-hidden="true">
+          <span>Hora</span>
+          <span>Contrato</span>
+          <span>C/P</span>
+          <span>OTM</span>
+          <span>Intención IA</span>
+          <span>Grado / Score</span>
+          <span>Detalles</span>
+          <span>DTE</span>
+          <span>Prima</span>
+        </div>
+        <div id="feed" class="feed"></div>
+      </div>
+    </section>
+
+    <p class="updated footer-note">
+      Datos delayed de Cboe (con Griegas reales: Delta, Gamma, IV y Theo) + fallback Yahoo.
+      Inspirado en la metodología de BladeMap AI (Vector · Lattice · Pulse).
+    </p>
+  </div>
+
+  <dialog id="howto-modal" class="modal">
+    <form method="dialog" class="modal-card">
+      <h3>Cómo funciona el Motor y Filtro IA (Estilo BladeMap)</h3>
+      <ul>
+        <li><strong>1. Filtro IA de Microestructura (Pulse)</strong> — En lugar de contar todo el volumen por igual, el motor cruza el último precio con la horquilla (<code>bid/ask</code>) y con el <strong>precio teórico de Cboe (<code>theo</code>)</strong>. Así detecta compras y ventas institucionales agresivas incluso cuando el market maker mueve la horquilla tras el impacto.</li>
+        <li><strong>2. Clasificación de Intención Institucional</strong> — Cada print recibe una etiqueta inteligente:
+          <ul>
+            <li>🐋 <strong>BALLENA (Whale)</strong>: Apertura agresiva con convicción ≥ 82 y prima ≥ $250K.</li>
+            <li>🎯 <strong>APERTURA CALL / PUT</strong>: Posicionamiento direccional limpio pagando el ask.</li>
+            <li>💰 <strong>VENTA PUT (SUELO) / VENTA CALL (TECHO)</strong>: Institución vendiendo prima para defender un soporte o fijar un techo.</li>
+            <li>🛡️ <strong>COBERTURA PUT (Hedge)</strong>: Compra de Puts muy fuera de dinero (<code>OTM ≥ 3.5%</code> o <code>|Δ| ≤ 0.28</code>) mientras el flujo general es alcista. El filtro IA atenúa su peso (0.25×) para que una cobertura de cartera no dé una falsa señal bajista.</li>
+            <li>🔄 <strong>CIERRE / ROTACIÓN</strong>: Contratos donde el interés abierto cae (<code>ΔOI &lt; 0</code>). El Filtro IA los oculta por defecto porque son toma de beneficios, no posicionamiento nuevo.</li>
+          </ul>
+        </li>
+        <li><strong>3. Mapa de Posicionamiento y Lattice GEX</strong> — Usando la <code>gamma</code> y el <code>open_interest</code> reales de Cboe, calculamos la <strong>Exposición Gamma de los Market Makers (GEX)</strong>:
+          <ul>
+            <li><strong>Gamma Positiva</strong>: Los dealers compran en caídas y venden en subidas (mercado estable que rebota en muros).</li>
+            <li><strong>Gamma Negativa</strong>: Los dealers están obligados a cubrir en la misma dirección del precio (aceleración de tendencia).</li>
+            <li><strong>Objetivo IA (Imán)</strong>: El strike hacia donde converge el mayor flujo direccional ponderado por convicción e intención IA.</li>
+          </ul>
+        </li>
+        <li><strong>4. Modo Stand Down</strong> — Igual que en BladeMap, cuando el flujo neto ponderado no supera los $500K o hay equilibrio entre compradores y vendedores, el sistema indica <strong>STAND DOWN</strong> (no forzar operaciones).</li>
+      </ul>
+      <button type="submit" class="btn solid">Entendido</button>
+    </form>
+  </dialog>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let live = true;
+let aiFilterOnly = true;
+let currentTicker = "MU";
+let state = null;
+
+function money(n) {
+  const v = Number(n) || 0;
+  const sign = v < 0 ? "−" : "";
+  const abs = Math.abs(v);
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(0)}K`;
+  return `${sign}$${Math.round(abs)}`;
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleTimeString("en-US", {
+    hour: "numeric", minute: "2-digit", timeZone: "America/New_York",
+  });
+}
+
+function fmtNum(n, digits) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  return Number(n).toLocaleString(undefined, { maximumFractionDigits: digits ?? 0 });
+}
+
+function otmLabel(p) {
+  if (p.otm_pct == null) return "—";
+  const v = Number(p.otm_pct);
+  return `${v > 0 ? "+" : ""}${v.toFixed(1)}%`;
+}
+
+function setStatus(text, mode) {
+  $("#status").textContent = text;
+  $("#live-dot").className = "dot " + (mode || (live ? "on" : "off"));
+}
+
+function filters() {
+  return {
+    aiOnly: aiFilterOnly,
+    intent: $("#f-intent").value || "",
+    side: ($("#f-side").value || "").toUpperCase(),
+    maxDte: $("#f-dte").value === "" ? null : Number($("#f-dte").value),
+    minOtm: $("#f-otm").value === "" ? null : Number($("#f-otm").value),
+    minPrem: Number($("#f-prem").value) || 0,
+  };
+}
+
+function matches(p, f) {
+  if (f.aiOnly && p.ai_keep === false) return false;
+  if (f.intent) {
+    const intent = String(p.ai_intent || "");
+    if (f.intent === "WHALE" && p.ai_grade !== "WHALE") return false;
+    if (f.intent === "DIRECTIONAL" && !intent.startsWith("DIRECTIONAL") && !intent.startsWith("WHALE")) return false;
+    if (f.intent === "INCOME" && !intent.startsWith("INCOME")) return false;
+    if (f.intent === "HEDGE" && intent !== "HEDGE") return false;
+  }
+  if (f.side && p.call_put !== f.side) return false;
+  if (f.maxDte != null && (p.dte == null || p.dte > f.maxDte)) return false;
+  if (f.minOtm != null && (p.otm_pct == null || p.otm_pct < f.minOtm)) return false;
+  if ((Number(p.premium) || 0) < f.minPrem) return false;
+  return true;
+}
+
+function span(cls, text, title) {
+  const el = document.createElement("span");
+  if (cls) el.className = cls;
+  el.textContent = text;
+  if (title) el.title = title;
+  return el;
+}
+
+function renderHero() {
+  const v = state?.verdict;
+  const pos = state?.positioning || {};
+  const sym = state?.ticker || currentTicker;
+  $("#v-sym").textContent = sym;
+
+  const dirMap = { ALCISTA: "BULLISH", BAJISTA: "BEARISH", NEUTRAL: "NEUTRAL" };
+  const dirClass = (v && dirMap[v.direction]) || "NEUTRAL";
+  $(".signal").className = "signal " + dirClass;
+
+  const dirEl = $("#v-dir");
+  dirEl.textContent =
+    dirClass === "BULLISH"
+      ? "▲ ALCISTA"
+      : dirClass === "BEARISH"
+      ? "▼ BAJISTA"
+      : "⏸ STAND DOWN";
+  dirEl.className = "dir " + dirClass;
+
+  $("#v-state-title").textContent = pos.thesis_es || v?.headline || "—";
+  $("#v-state-detail").textContent = pos.llm_synthesis || pos.subthesis_es || "";
+  $("#v-evidence").textContent = v?.evidence ? `Mayor jugada: ${v.evidence}` : "";
+
+  const actEl = $("#vec-action");
+  actEl.textContent = pos.action_label || "ESPERANDO DATOS";
+  actEl.className = "action-chip " + dirClass;
+
+  const badge = $("#v-state-badge");
+  const nSweeps = state?.sweeps_today || 0;
+  const kept = v?.n_ai_kept ?? v?.n_voted ?? 0;
+  badge.textContent = v
+    ? `${sym} · ${kept} jugadas IA limpias (${v.n_ai_filtered || 0} descartadas por ruido)${nSweeps ? ` · ${nSweeps} barridos` : ""}`
+    : "—";
+  badge.className = "pill " + (dirClass === "BULLISH" ? "aligned" : dirClass === "BEARISH" ? "noisy" : "");
+
+  // Target Highlight
+  if (pos.target_strike != null) {
+    const dist = pos.target_dist_pct != null
+      ? `${pos.target_dist_pct > 0 ? "+" : ""}${pos.target_dist_pct}%`
+      : "";
+    $("#v-target-price").textContent = `$${fmtNum(pos.target_strike, 1)} ${dist}`;
+    $("#v-target-sub").textContent = pos.target_expiry
+      ? `Vto. clave ${pos.target_expiry}${pos.target_premium ? ` · ${money(pos.target_premium)} acumulados` : ""}`
+      : "Imán estructural de opciones";
+  } else {
+    $("#v-target-price").textContent = "—";
+    $("#v-target-sub").textContent = "Sin objetivo direccional claro";
+  }
+
+  // Spot price + change + IV30
+  $("#v-price").textContent =
+    state?.spot == null ? "—" : `$${Number(state.spot).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const chg = state?.spot_change_pct;
+  const iv30 = state?.iv30;
+  const subParts = [];
+  if (chg != null) subParts.push(`${chg >= 0 ? "+" : ""}${Number(chg).toFixed(2)}% hoy`);
+  if (iv30 != null && iv30 > 0) subParts.push(`IV30 ${Number(iv30).toFixed(1)}%`);
+  $("#v-price-sub").textContent = subParts.join(" · ") || "Precio subyacente";
+
+  // Confidence
+  const hasPrints = (v?.n_prints || 0) > 0;
+  $("#v-conf-num").textContent = hasPrints ? `${v.confidence}%` : "—";
+  $("#v-conf-bar").style.width = hasPrints ? `${Math.max(0, Math.min(100, v.confidence || 0))}%` : "0%";
+  $("#v-conf-label").textContent =
+    !hasPrints ? "—" : v.confidence >= 70 ? "Convicción Alta" : v.confidence >= 45 ? "Convicción Media" : "Convicción Baja";
+
+  // Stage & Invalidation
+  const dots = v?.stage_dots || 0;
+  [...$("#v-stage-track").querySelectorAll("i")].forEach((el, i) => {
+    el.classList.toggle("on", dirClass !== "NEUTRAL" && i < dots);
+  });
+  $("#v-stage-label").textContent =
+    v ? `${v.stage_label || "—"}${dirClass !== "NEUTRAL" ? ` (${v.streak || 1} scans)` : ""}` : "—";
+
+  const inv = v?.invalidation;
+  $("#v-inv-price").textContent = inv ? `$${fmtNum(inv.price, 1)}` : "—";
+  const arrow = $("#v-inv-arrow");
+  arrow.textContent = inv ? (inv.arrow === "up" ? "↑" : "↓") : "";
+  arrow.className = "inv-arrow " + (inv?.arrow || "");
+
+  const checksEl = $("#v-checks");
+  checksEl.textContent = "";
+  const b = state?.book;
+  const lv = state?.levels;
+  const chips = [];
+  if (kept > 0) chips.push([true, `🤖 ${kept} jugadas institucionales validadas por IA`]);
+  if ((b?.new_position_premium || 0) > 0)
+    chips.push([true, `✓ Apertura nueva (ΔOI>0): ${money(b.new_position_premium)}`]);
+  if (nSweeps > 0) chips.push([true, `⚡ ${nSweeps} barridos agresivos`]);
+  if (lv?.gamma_regime && lv.gamma_regime !== "UNKNOWN") {
+    chips.push([lv.gamma_regime === "POSITIVE", `📐 ${lv.gamma_regime_label}`]);
+  }
+  if (!chips.length) chips.push([false, "Sin evidencia institucional todavía"]);
+  for (const [ok, label] of chips) {
+    const chip = document.createElement("span");
+    chip.className = "check" + (ok ? " on" : "");
+    chip.textContent = label;
+    checksEl.appendChild(chip);
+  }
+
+  $("#v-conf-note").textContent = v
+    ? `Flujo neto IA: ${money(v.net_ai ?? v.net)} · Ponderado por convicción: ${money(v.net)} (bruto sin ponderar ${money(v.net_unweighted)}).`
+    : "";
+
+  if (inv && state?.levels) {
+    const dist = inv.distance_pct >= 0 ? `+${inv.distance_pct}%` : `${inv.distance_pct}%`;
+    $("#v-inv-detail").textContent =
+      `Invalidación de tesis en $${fmtNum(inv.price, 1)} (${inv.reason}, a ${dist} del spot · vto. ${state.levels.expiry}).`;
+  } else {
+    $("#v-inv-detail").textContent = "";
+  }
+
+  const status = $("#vec-status");
+  const src = (state?.source || "none").toUpperCase();
+  if (src === "NONE") {
+    status.textContent = "SIN DATOS";
+    status.className = "status-chip warn";
+  } else {
+    status.textContent = `${src} · ${state.market_open ? "MERCADO ABIERTO" : "CERRADO (DATOS ÚLTIMA SESIÓN)"}`;
+    status.className = "status-chip" + (state.market_open ? " ok" : " warn");
+  }
+
+  const ts = state?.updated_at ? new Date(state.updated_at) : null;
+  $("#vec-updated").textContent =
+    ts && !Number.isNaN(ts.getTime()) ? `ACTUALIZADO ${ts.toLocaleString()}` : "ACTUALIZADO —";
+}
+
+function renderPositioningMap() {
+  const pos = state?.positioning || {};
+  const lv = state?.levels;
+  const t = state?.targets || {};
+
+  // Gamma badge
+  const gBadge = $("#gamma-badge");
+  if (lv?.net_gex != null) {
+    gBadge.textContent = `${lv.gamma_regime_label} (GEX ${money(lv.net_gex)})`;
+    gBadge.className = "gamma-pill " + (lv.gamma_regime === "POSITIVE" ? "pos" : lv.gamma_regime === "NEGATIVE" ? "neg" : "");
+  } else {
+    gBadge.textContent = "Régimen Gamma: Estándar OI";
+    gBadge.className = "gamma-pill";
+  }
+
+  // Visual Price Ladder
+  const track = $("#ladder-track");
+  track.textContent = "";
+  const nodes = pos.ladder || [];
+  const spotNode = nodes.find((n) => n.kind === "spot");
+  const targetNode = nodes.find((n) => n.kind === "target");
+
+  if (spotNode && targetNode && spotNode.pct !== targetNode.pct) {
+    const fill = document.createElement("div");
+    const left = Math.min(spotNode.pct, targetNode.pct);
+    const width = Math.abs(targetNode.pct - spotNode.pct);
+    const isBull = targetNode.price >= spotNode.price;
+    fill.className = "ladder-vector " + (isBull ? "bull" : "bear");
+    fill.style.left = `${left}%`;
+    fill.style.width = `${width}%`;
+    track.appendChild(fill);
+  }
+
+  nodes.forEach((n, idx) => {
+    const pin = document.createElement("div");
+    pin.className = `ladder-pin ${n.kind} ${idx % 2 === 1 ? "alt" : ""}`;
+    pin.style.left = `${n.pct}%`;
+
+    const dot = document.createElement("i");
+    dot.className = "pin-dot";
+    const lbl = document.createElement("div");
+    lbl.className = "pin-label";
+    lbl.innerHTML = `<span class="pin-title">${n.label}</span><strong class="pin-price">$${fmtNum(n.price, 1)}</strong>`;
+    pin.appendChild(dot);
+    pin.appendChild(lbl);
+    track.appendChild(pin);
+  });
+
+  // 4 Structural cards
+  if (lv) {
+    $("#lv-put-wall").textContent = `$${fmtNum(lv.put_wall.strike, 1)}`;
+    $("#lv-put-wall-sub").textContent = `OI ${fmtNum(lv.put_wall.oi)} contratos · vto. ${lv.expiry}`;
+    $("#lv-call-wall").textContent = `$${fmtNum(lv.call_wall.strike, 1)}`;
+    $("#lv-call-wall-sub").textContent = `OI ${fmtNum(lv.call_wall.oi)} contratos${lv.king_node ? ` · King $${fmtNum(lv.king_node.strike, 1)}` : ""}`;
+    $("#lv-maxpain").textContent = `$${fmtNum(lv.max_pain.strike, 1)}`;
+    $("#lv-maxpain-exp").textContent = lv.gamma_flip
+      ? `Gamma Flip en $${fmtNum(lv.gamma_flip, 1)}`
+      : `Equilibrio OI (${lv.expiry})`;
+  } else {
+    $("#lv-put-wall").textContent = "—";
+    $("#lv-put-wall-sub").textContent = "—";
+    $("#lv-call-wall").textContent = "—";
+    $("#lv-call-wall-sub").textContent = "—";
+    $("#lv-maxpain").textContent = "—";
+    $("#lv-maxpain-exp").textContent = "—";
+  }
+
+  if (pos.target_strike != null) {
+    const dist = pos.target_dist_pct != null ? ` (${pos.target_dist_pct > 0 ? "+" : ""}${pos.target_dist_pct}%)` : "";
+    $("#tg-bull").textContent = `$${fmtNum(pos.target_strike, 1)}${dist}`;
+    $("#tg-bull-detail").textContent = pos.target_premium
+      ? `${money(pos.target_premium)} en ${pos.target_prints || 1} prints · vto. ${pos.target_expiry || "—"}`
+      : `Objetivo hacia ${pos.target_expiry || "vencimiento"}`;
+  } else if (t.bull) {
+    $("#tg-bull").textContent = `$${fmtNum(t.bull.strike, 1)}`;
+    $("#tg-bull-detail").textContent = `${money(t.bull.premium)} · ${t.bull.n_prints} prints`;
+  } else {
+    $("#tg-bull").textContent = "—";
+    $("#tg-bull-detail").textContent = "Sin objetivo activo";
+  }
+}
+
+function renderBook() {
+  const b = state?.book;
+  if (!b) return;
+  const netEl = $("#book-net");
+  netEl.textContent = `${b.net >= 0 ? "+" : "−"}${money(Math.abs(b.net))}`;
+  netEl.className = b.net >= 0 ? "up" : "down";
+  $("#book-split").textContent = `calls ${money(b.call_premium)} · puts ${money(b.put_premium)}`;
+
+  const deltaUsd = b.net_delta_usd || 0;
+  const deltaEl = $("#book-delta");
+  deltaEl.textContent = `${deltaUsd >= 0 ? "+" : "−"}${money(Math.abs(deltaUsd))}`;
+  deltaEl.className = "num " + (deltaUsd >= 0 ? "up" : "down");
+
+  const fmtK = (n) => (n == null ? "—" : `$${Number(n).toFixed(0)}`);
+  $("#book-avg-split").textContent = `strike medio: C ${fmtK(b.call_avg_strike)} · P ${fmtK(b.put_avg_strike)}`;
+
+  $("#book-new").textContent = money(b.new_position_premium || 0);
+  $("#book-new-split").textContent = `${b.new_position_count || 0} contratos con ΔOI > 0`;
+
+  const ids = [["#book-dte1", "#book-dte1s"], ["#book-dte2", "#book-dte2s"], ["#book-dte3", "#book-dte3s"]];
+  ["0-7", "8-21", "22-45"].forEach((name, i) => {
+    const bk = (b.dte_buckets || {})[name] || {};
+    const [vId, sId] = ids[i];
+    if (!bk.total) {
+      $(vId).textContent = "—";
+      $(sId).textContent = "—";
+      return;
+    }
+    $(vId).textContent = money(bk.total);
+    $(sId).textContent = `Calls ${bk.call_share != null ? Math.round(bk.call_share * 100) + "%" : "—"}`;
+  });
+}
+
+function renderCampaigns() {
+  const list = $("#camp-list");
+  list.textContent = "";
+  const camps = state?.campaigns || [];
+  $("#camp-count").textContent = `${camps.length}`;
+  if (!camps.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "Sin campañas multi-scan todavía (se activan cuando un contrato recibe flujo en 2+ escaneos)";
+    list.appendChild(empty);
+    return;
+  }
+  for (const c of camps) {
+    const row = document.createElement("div");
+    row.className = "camp";
+    const left = document.createElement("span");
+    left.textContent =
+      `${c.call_put} $${Number(c.strike).toFixed(0)} (${c.expiry}) · ${c.n_prints} entradas · ${money(c.total_premium)} · ${fmtTime(c.first_seen)}→${fmtTime(c.last_seen)}`;
+    const right = document.createElement("span");
+    const cls = (c.label || "").replace(/\s+/g, "_");
+    right.className = `conv ${cls}`;
+    right.textContent = `${c.ai_label ? c.ai_label + " · " : ""}${c.label || ""}`;
+    row.appendChild(left);
+    row.appendChild(right);
+    list.appendChild(row);
+  }
+}
+
+function renderFeed() {
+  const f = filters();
+  const feed = $("#feed");
+  const allPrints = state?.prints || [];
+  const rows = allPrints
+    .filter((p) => matches(p, f))
+    .sort((a, b) => (Number(b.premium) || 0) - (Number(a.premium) || 0))
+    .slice(0, 150);
+
+  feed.textContent = "";
+  $("#feed-count").textContent = `${rows.length} / ${allPrints.length}`;
+
+  const filteredOutCount = allPrints.filter((p) => p.ai_keep === false).length;
+  $("#pulse-summary").textContent = aiFilterOnly
+    ? `Filtro IA activo: mostrando ${rows.length} jugadas institucionales limpias (${filteredOutCount} de ruido/cierre ocultas)`
+    : `Mostrando todos los prints (${allPrints.length}), incluyendo ${filteredOutCount} sin sesgo o de cierre`;
+
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = allPrints.length
+      ? "Ningún print coincide con este filtro (prueba desactivar 'Filtro IA' o ampliar filtros)."
+      : "Stand Down · Sin flujo institucional inusual detectado en esta sesión.";
+    feed.appendChild(empty);
+    return;
+  }
+
+  const sym = state?.ticker || currentTicker;
+  for (const p of rows) {
+    const row = document.createElement("div");
+    row.className = "row" + (p.ai_keep === false ? " muted-row" : "");
+    if (p.ai_reason) row.title = p.ai_reason;
+
+    row.appendChild(span("time", fmtTime(p.first_seen)));
+    row.appendChild(span("sym", `${sym} $${Number(p.strike).toFixed(0)}`, `Vto. ${p.expiry}`));
+    row.appendChild(span(`cp ${p.call_put}`, String(p.call_put ?? "")));
+    row.appendChild(span("otm", otmLabel(p)));
+
+    // Columna Intención IA
+    const intentWrap = document.createElement("span");
+    intentWrap.className = "intent-col";
+    const badge = document.createElement("i");
+    const dirCls = p.ai_direction === "ALCISTA" ? "bull" : p.ai_direction === "BAJISTA" ? "bear" : p.ai_direction === "HEDGE" ? "hedge" : "neutral";
+    badge.className = `intent-badge ${dirCls}`;
+    badge.textContent = p.ai_label || (p.side === "buy" ? "COMPRA" : p.side === "sell" ? "VENTA" : "SIN SESGO");
+    intentWrap.appendChild(badge);
+    if (p.ai_structure) {
+      const st = document.createElement("i");
+      st.className = "struct-badge";
+      st.textContent = p.ai_structure;
+      intentWrap.appendChild(st);
+    }
+    row.appendChild(intentWrap);
+
+    // Columna Grado / Score IA
+    const grade = p.ai_grade || "SILVER";
+    const conv = p.conviction != null ? p.conviction : "—";
+    row.appendChild(span(`ia grade-${grade}`, `${grade} · ${conv}`, p.ai_reason || ""));
+
+    // Columna Flags / Microestructura
+    const flags = document.createElement("span");
+    flags.className = "flags";
+    if (p.is_new_position) {
+      const el = document.createElement("i");
+      el.className = "flag new-pos";
+      el.textContent = "NUEVA (ΔOI+)";
+      flags.appendChild(el);
+    }
+    if (p.sweep) {
+      const el = document.createElement("i");
+      el.className = "flag combo";
+      el.textContent = "BARRIDO";
+      flags.appendChild(el);
+    }
+    if (p.delta != null) {
+      const el = document.createElement("i");
+      el.className = "flag greek";
+      el.textContent = `Δ ${Number(p.delta).toFixed(2)}`;
+      flags.appendChild(el);
+    } else if (p.side === "buy" || p.side === "sell") {
+      const el = document.createElement("i");
+      el.className = "flag";
+      el.textContent = p.side === "buy" ? "ASK" : "BID";
+      flags.appendChild(el);
+    }
+    if (!flags.hasChildNodes()) flags.textContent = `Vol ${fmtNum(p.delta_vol)}`;
+    row.appendChild(flags);
+
+    row.appendChild(span("dte", p.dte == null ? "—" : `${p.dte}d`));
+    row.appendChild(span("prem", money(p.premium), `ΔVol: ${fmtNum(p.delta_vol)} · OI: ${fmtNum(p.open_interest)}`));
+    feed.appendChild(row);
+  }
+}
+
+function renderAll() {
+  renderHero();
+  renderPositioningMap();
+  renderBook();
+  renderCampaigns();
+  renderFeed();
+}
+
+async function load(scanning) {
+  try {
+    const r = await fetch(`/api/state?ticker=${encodeURIComponent(currentTicker)}`);
+    state = await r.json();
+    if (state.ticker) {
+      currentTicker = state.ticker;
+      ensureTickerOption(currentTicker);
+      $("#f-und").value = currentTicker;
+    }
+    renderAll();
+    if (state.error && !(state.prints || []).length) {
+      setStatus(state.error, "off");
+    } else if (scanning) {
+      setStatus(`escaneando ${currentTicker}…`, "scan");
+    } else if (!state.market_open) {
+      setStatus("mercado cerrado · datos última sesión", "off");
+    } else if (live) {
+      setStatus("en vivo · 10s", "on");
+    } else {
+      setStatus("pausado", "off");
+    }
+  } catch (e) {
+    setStatus(String(e.message || e), "off");
+  }
+}
+
+function ensureTickerOption(sym) {
+  const sel = $("#f-und");
+  if (![...sel.options].some((o) => o.value === sym)) {
+    const opt = document.createElement("option");
+    opt.value = sym;
+    opt.textContent = sym;
+    sel.appendChild(opt);
+  }
+}
+
+async function switchTicker(sym) {
+  const clean = String(sym || "").trim().toUpperCase().replace(/[^A-Z0-9._-]/g, "");
+  if (!clean) return;
+  currentTicker = clean;
+  ensureTickerOption(clean);
+  $("#f-und").value = clean;
+  setStatus(`cargando ${clean}…`, "scan");
+  await load(true);
+}
+
+let refreshing = false;
+async function refreshAll() {
+  if (refreshing) return;
+  refreshing = true;
+  try { await load(false); } finally { refreshing = false; }
+}
+
+$("#btn-live").addEventListener("click", () => {
+  live = !live;
+  $("#btn-live").classList.toggle("on", live);
+  setStatus(live ? "en vivo · 10s" : "pausado", live ? "on" : "off");
+});
+
+$("#btn-scan").addEventListener("click", async () => {
+  try {
+    setStatus(`escaneando ${currentTicker}…`, "scan");
+    await fetch(`/api/scan?ticker=${encodeURIComponent(currentTicker)}`, { method: "POST" });
+    await load(false);
+  } catch (e) {
+    setStatus(String(e.message || e), "off");
+  }
+});
+
+$("#btn-ai-filter").addEventListener("click", () => {
+  aiFilterOnly = !aiFilterOnly;
+  const btn = $("#btn-ai-filter");
+  btn.classList.toggle("on", aiFilterOnly);
+  btn.setAttribute("aria-pressed", String(aiFilterOnly));
+  btn.textContent = aiFilterOnly
+    ? "🤖 Filtro IA: Solo Posicionamiento Real"
+    : "👁️ Filtro IA Desactivado (Viendo Ruido)";
+  renderFeed();
+});
+
+$("#f-und").addEventListener("change", (e) => {
+  switchTicker(e.target.value);
+});
+
+$("#custom-ticker-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const inp = $("#custom-ticker");
+  if (inp.value.trim()) {
+    switchTicker(inp.value);
+    inp.value = "";
+  }
+});
+
+for (const id of ["#f-intent", "#f-side", "#f-dte", "#f-otm", "#f-prem"]) {
+  $(id).addEventListener("change", renderFeed);
+}
+
+$("#btn-howto").addEventListener("click", () => $("#howto-modal").showModal());
+
+load(false).catch((e) => setStatus(String(e.message || e), "off"));
+setInterval(() => { if (live) refreshAll().catch(() => {}); }, 10000);
+</script>
+</body>
+</html>

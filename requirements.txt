@@ -1,0 +1,6 @@
+# Solo lo que hace falta para servir la web y el fallback Yahoo.
+fastapi==0.148.0
+uvicorn[standard]==0.54.0
+yfinance==1.7.0
+pandas==3.0.6
+pytest==9.1.1
