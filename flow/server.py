@@ -20,7 +20,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from flow import engine, store
+from flow import engine, opra, store
 from flow.fetch import DEFAULT_TICKERS, TICKER, clean_ticker, fetch_chain
 
 try:
@@ -99,9 +99,30 @@ def run_scan(ticker: str | None = None) -> dict[str, Any]:
                     p["side"] = inferred
         engine.normalize_print(p, spot=spot)
 
-    new_prints = engine.detect_prints(rows, prev_volumes, prev_oi, spot=spot) if rows else []
-    day_prints = engine.merge_day_prints(day_prints, new_prints, store.now_iso_et())
-    engine.classify_prints_ai(day_prints, spot=spot, spot_change_pct=spot_change_pct)
+    # Fuente de prints: OPRA (cinta real) primero; cadena Cboe solo si
+    # OPRA falla o viene vacía. Los niveles/GEX siempre salen de la
+    # cadena (la cinta no trae el OI completo por strike).
+    opra_trades, opra_meta = opra.fetch_opra_trades(sym)
+    prints_source: str | None = None
+    prints_delay: int | None = None
+    if opra_trades:
+        if spot is None:
+            spot = opra_trades[0].get("underlying_price")
+        # En modo OPRA solo cuentan los trades OPRA del día (con
+        # unique_id): los prints viejos de cadena del mismo día se
+        # dejan fuera para no contar dos veces el mismo flujo.
+        kept = [p for p in day_prints if p.get("unique_id")]
+        new_opra = opra.prints_for_day(opra_trades, today, spot=spot)
+        engine._mark_sweeps(new_opra, spot)  # clusters además del flag OPRA
+        day_prints = opra.accumulate_opra_prints(kept, new_opra)
+        engine.classify_prints_ai(day_prints, spot=spot, spot_change_pct=spot_change_pct)
+        prints_source = "OPRA"
+        prints_delay = int((opra_meta or {}).get("delay_minutes") or 60)
+    else:
+        new_prints = engine.detect_prints(rows, prev_volumes, prev_oi, spot=spot) if rows else []
+        day_prints = engine.merge_day_prints(day_prints, new_prints, store.now_iso_et())
+        engine.classify_prints_ai(day_prints, spot=spot, spot_change_pct=spot_change_pct)
+        prints_source = source if rows else None
 
     # Streak: scans consecutivos con la misma dirección (mismo día).
     prev_state = store.load_state(sym)
@@ -136,11 +157,15 @@ def run_scan(ticker: str | None = None) -> dict[str, Any]:
         "targets": engine.targets(day_prints, levels_),
         "campaigns": engine.campaigns(day_prints),
         "sweeps_today": sweeps_today,
-        "source": source,
+        "source": prints_source or source,
+        "prints_source": prints_source,
+        "prints_delay_minutes": prints_delay,
         "market_open": market_open(),
         "llm_enabled": bool(os.environ.get("GEMINI_API_KEY")),
         "updated_at": datetime.now(ET).isoformat(),
-        "error": None if rows else f"Sin datos para {sym}: Cboe y Yahoo no respondieron.",
+        "error": None
+        if (rows or opra_trades)
+        else f"Sin datos para {sym}: OPRA y Cboe/Yahoo no respondieron.",
     }
     store.save_state(state, sym)
     store.save_day_prints(today, day_prints, sym)

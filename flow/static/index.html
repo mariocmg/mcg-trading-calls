@@ -279,8 +279,10 @@
     </section>
 
     <p class="updated footer-note">
-      Datos delayed de Cboe (con Griegas reales: Delta, Gamma, IV y Theo) + fallback Yahoo.
-      Inspirado en la metodología de BladeMap AI (Vector · Lattice · Pulse).
+      Prints: cinta OPRA de CaymanBot (lado real, flags whale/sweep, multileg) con 60 min de
+      retraso en anónimo — no es cinta en vivo; si OPRA falla, respaldo con la cadena delayed
+      de Cboe (con Griegas reales: Delta, Gamma, IV y Theo) + fallback Yahoo. Niveles y GEX
+      siempre de la cadena Cboe. Inspirado en la metodología de BladeMap AI (Vector · Lattice · Pulse).
     </p>
   </div>
 
@@ -288,6 +290,7 @@
     <form method="dialog" class="modal-card">
       <h3>Cómo funciona el Motor y Filtro IA (Estilo BladeMap)</h3>
       <ul>
+        <li><strong>0. Fuente OPRA (CaymanBot)</strong> — Los prints vienen de la cinta OPRA: lado REAL de cada trade (no inferido), flags whale/sweep y patas multileg. Retraso 60 min en anónimo (16 min con cuenta gratis); no es cinta en vivo. Si OPRA falla, el motor usa la cadena delayed de Cboe como respaldo. Niveles y GEX siempre salen de la cadena Cboe.</li>
         <li><strong>1. Filtro IA de Microestructura (Pulse)</strong> — En lugar de contar todo el volumen por igual, el motor cruza el último precio con la horquilla (<code>bid/ask</code>) y con el <strong>precio teórico de Cboe (<code>theo</code>)</strong>. Así detecta compras y ventas institucionales agresivas incluso cuando el market maker mueve la horquilla tras el impacto.</li>
         <li><strong>2. Clasificación de Intención Institucional</strong> — Cada print recibe una etiqueta inteligente:
           <ul>
@@ -505,7 +508,8 @@ function renderHero() {
     status.textContent = "SIN DATOS";
     status.className = "status-chip warn";
   } else {
-    status.textContent = `${src} · ${state.market_open ? "MERCADO ABIERTO" : "CERRADO (DATOS ÚLTIMA SESIÓN)"}`;
+    const delay = state?.prints_delay_minutes ? ` · ${state.prints_delay_minutes} MIN` : "";
+    status.textContent = `${src}${delay} · ${state.market_open ? "MERCADO ABIERTO" : "CERRADO (DATOS ÚLTIMA SESIÓN)"}`;
     status.className = "status-chip" + (state.market_open ? " ok" : " warn");
   }
 
