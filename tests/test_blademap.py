@@ -184,9 +184,10 @@ def _verdict(direction="ALCISTA", n_voted=3, streak=3):
 
 
 def test_gates_all_green():
-    gs = gates(_verdict(), 60)
+    gs = gates(_verdict(), 60,
+               trend={"position": "above", "sma5": 100.0, "last_bar_et": "2026-10-29 15:30 ET"})
     assert all(g["ok"] for g in gs)
-    assert [g["key"] for g in gs] == ["fresh", "direction", "backing", "explained"]
+    assert [g["key"] for g in gs] == ["fresh", "direction", "backing", "explained", "sma"]
 
 
 def test_gates_fail_without_direction_or_delay_or_backing():
@@ -194,13 +195,15 @@ def test_gates_fail_without_direction_or_delay_or_backing():
     by_key = {g["key"]: g["ok"] for g in gs}
     assert by_key["fresh"] is False
     assert by_key["direction"] is False
+    assert by_key["sma"] is None  # sin tendencia, el gate SMA queda en "?"
     gs = gates(_verdict(n_voted=1, streak=1), 60)
     by_key = {g["key"]: g["ok"] for g in gs}
     assert by_key["backing"] is False
 
 
 def test_setup_folds_same_key_and_resets_on_change():
-    gs = gates(_verdict(), 60)
+    gs = gates(_verdict(), 60,
+               trend={"position": "above", "sma5": 100.0, "last_bar_et": "2026-10-29 15:30 ET"})
     s1 = setup_update(None, "ALCISTA", "CONFIRM", gs)
     assert s1 == {"key": "ALCISTA:CONFIRM", "count": 1, "ready": True,
                   "label": "SETUP CONFIRMADO"}

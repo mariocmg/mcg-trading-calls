@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pkl
+.venv/
+venv/
+
+# Node (sidecar TradingView)
+node_modules/
+
+# Data & local state (never commit the database or trained models)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets (see .env.example)
+.env
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,1 @@
+{"dependencies":{"@mathieuc/tradingview":"4.1.0"},"description":"Sidecar de velas horarias TradingView para el escáner FLOW (pata SMA del Holy Grail)","engines":{"node":">=20.0.0"},"name":"flow-tv-hourly","private":true,"type":"module","version":"1.0.0"}

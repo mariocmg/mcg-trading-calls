@@ -748,12 +748,18 @@ def vector_refresh(vector: dict[str, Any] | None, now_iso: str) -> dict[str, Any
     return v
 
 
-def gates(verdict_: dict[str, Any], delay_minutes: int | None) -> list[dict[str, Any]]:
-    """Cuatro gates estilo BladeMap, honestos sobre lo que miden:
+def gates(verdict_: dict[str, Any], delay_minutes: int | None,
+          trend: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Cinco gates estilo BladeMap, honestos sobre lo que miden:
     - Frescura: la fuente declara su retraso (no se finge tiempo real).
     - Dirección: hay dirección no neutral.
     - Respaldo: al menos 2 prints votando o racha ≥ 2 scans.
     - Explicado: el veredicto trae evidencia distinta del texto vacío.
+    - SMA horaria: pata Holy Grail — el spot debe estar del lado
+      correcto de la SMA5 horaria de TradingView (alcista: por encima;
+      bajista: por debajo). Sin tendencia, ok=None ("?" en la UI):
+      bloquea el setup porque nada sin verificar confirma, pero no se
+      presenta como un fallo.
     """
     out = []
     if delay_minutes is not None:
@@ -774,6 +780,23 @@ def gates(verdict_: dict[str, Any], delay_minutes: int | None) -> list[dict[str,
     out.append({"key": "explained", "label": "Explicado",
                 "ok": bool(ev) and ev != "Sin prints inusuales hoy.",
                 "detail": ev[:80]})
+    if trend and trend.get("position") in ("above", "below", "flat"):
+        if direction == "ALCISTA":
+            sma_ok: bool | None = trend["position"] == "above"
+        elif direction == "BAJISTA":
+            sma_ok = trend["position"] == "below"
+        else:
+            sma_ok = False
+        pos_txt = {"above": "por encima", "below": "por debajo", "flat": "en"}[trend["position"]]
+        detail = (f"Spot {pos_txt} SMA5 ${trend['sma5']:.2f} "
+                  f"(TV 1h, barra {trend.get('last_bar_et') or '?'})")
+        if trend.get("stale"):
+            detail += " · dato obsoleto"
+        out.append({"key": "sma", "label": "SMA horaria", "ok": sma_ok, "detail": detail})
+    else:
+        out.append({"key": "sma", "label": "SMA horaria", "ok": None,
+                    "detail": (trend or {}).get("error")
+                    or "Sin tendencia horaria (sidecar TV no disponible)"})
     return out
 
 
@@ -781,9 +804,8 @@ def setup_update(prev_setup: dict[str, Any] | None, direction: str, stage: str, 
     """Setup estilo Sentinel: misma clave dirección:etapa que el scan
     anterior suma al contador (plegado ×N) en vez de abrir otra
     tarjeta; clave distinta reinicia a 1. ready exige todos los
-    gates en verde Y etapa Confirm. La pata SMA horaria del Holy
-    Grail NO está aquí: el escáner no tiene velas horarias, así que
-    el setup es Pulse+Vector, no el setup completo."""
+    gates en verde Y etapa Confirm — incluida la pata SMA horaria
+    (un gate en "?" también bloquea: nada sin verificar confirma)."""
     key = f"{direction}:{stage}"
     prev = prev_setup or {}
     count = int(prev.get("count") or 0) + 1 if prev.get("key") == key else 1

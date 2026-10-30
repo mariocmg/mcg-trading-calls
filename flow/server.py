@@ -20,7 +20,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from flow import engine, opra, store
+from flow import engine, opra, store, tv_hourly
 from flow.fetch import DEFAULT_TICKERS, TICKER, clean_ticker, fetch_chain
 
 try:
@@ -78,7 +78,9 @@ def _enrich_legacy_state(state: dict[str, Any]) -> dict[str, Any]:
             ),
             now_iso,
         )
-    state["gates"] = engine.gates(v, state.get("prints_delay_minutes"))
+    state["gates"] = engine.gates(
+        v, state.get("prints_delay_minutes"), trend=state.get("trend")
+    )
     if not state.get("setup"):
         state["setup"] = engine.setup_update(
             None, v["direction"], state["vector"]["stage"], state["gates"]
@@ -166,7 +168,10 @@ def run_scan(ticker: str | None = None) -> dict[str, Any]:
     vector_ = engine.vector_update(
         prev_vector, verdict_["direction"], streak, store.now_iso_et()
     )
-    gates_ = engine.gates(verdict_, prints_delay)
+    # Tendencia horaria TradingView (sidecar Node): nunca bloquea el scan;
+    # si el sidecar falla, trend trae el error y el gate SMA queda en "?".
+    trend_ = tv_hourly.snapshot(sym, spot=spot)
+    gates_ = engine.gates(verdict_, prints_delay, trend=trend_)
     prev_setup = prev_state.get("setup") if prev_state.get("date") == today else None
     setup_ = engine.setup_update(
         prev_setup, verdict_["direction"], vector_["stage"], gates_
@@ -188,6 +193,7 @@ def run_scan(ticker: str | None = None) -> dict[str, Any]:
         "verdict": verdict_,
         "vector": vector_,
         "gates": gates_,
+        "trend": trend_,
         "setup": setup_,
         "positioning": pos_map,
         "prints": day_prints,

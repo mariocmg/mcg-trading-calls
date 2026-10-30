@@ -32,6 +32,21 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo Comprobando sidecar TradingView (Node)...
+where node >nul 2>&1
+if errorlevel 1 (
+  echo AVISO: Node no encontrado. El escaner funciona, pero la pata SMA horaria quedara en ?.
+  echo Instalalo desde https://nodejs.org/ (version 20 o superior) y vuelve a ejecutar iniciar.bat.
+) else (
+  if not exist "tv\node_modules" (
+    echo Instalando dependencia del sidecar TradingView...
+    call npm install --prefix tv --no-audit --no-fund
+    if errorlevel 1 (
+      echo AVISO: no se pudo instalar el sidecar. La pata SMA horaria quedara en ?.
+    )
+  )
+)
+
 call :ready
 if not errorlevel 1 goto open
 

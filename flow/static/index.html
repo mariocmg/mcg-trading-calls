@@ -99,6 +99,11 @@
             <strong id="v-vector-stage" class="stage-text">—</strong>
             <span id="v-vector-sub" class="mini">—</span>
           </div>
+          <div class="stat">
+            <span class="mini">Tendencia 1h (TradingView)</span>
+            <strong id="v-trend-sma" class="stage-text">—</strong>
+            <span id="v-trend-sub" class="mini">—</span>
+          </div>
         </div>
       </div>
 
@@ -314,7 +319,7 @@
           </ul>
         </li>
         <li><strong>4. Modo Stand Down</strong> — Igual que en BladeMap, cuando el flujo neto ponderado no supera los $500K o hay equilibrio entre compradores y vendedores, el sistema indica <strong>STAND DOWN</strong> (no forzar operaciones).</li>
-        <li><strong>5. Ciclo Vector, sellos BM, OI sintético y gates</strong> — El Vector sigue su ciclo por scans (Giro → Construyendo → Confirmado) con frescura según minutos desde el giro. Cada print lleva además un sello BladeMap (Whale ≥ $1M; Golden ≥ $900K y 2–30% OTM; Silver ≥ $300K con etiqueta de convicción) y lectura Apertura/Cierre (dirección OPRA real o ΔOI en cadena). El OI sintético suma el flujo firmado del día al OI oficial por strike. Los cuatro gates (frescura, dirección, respaldo, explicado) deben estar en verde y el ciclo en Confirmado para que el setup cuente como confirmado; la misma clave dirección:etapa se pliega en un contador ×N en vez de abrir otra tarjeta. La pata SMA horaria del setup Holy Grail no está implementada: el escáner no tiene velas horarias.</li>
+        <li><strong>5. Ciclo Vector, sellos BM, OI sintético y gates</strong> — El Vector sigue su ciclo por scans (Giro → Construyendo → Confirmado) con frescura según minutos desde el giro. Cada print lleva además un sello BladeMap (Whale ≥ $1M; Golden ≥ $900K y 2–30% OTM; Silver ≥ $300K con etiqueta de convicción) y lectura Apertura/Cierre (dirección OPRA real o ΔOI en cadena). El OI sintético suma el flujo firmado del día al OI oficial por strike. Los cinco gates (frescura, dirección, respaldo, explicado, SMA horaria) deben estar en verde y el ciclo en Confirmado para que el setup cuente como confirmado; la misma clave dirección:etapa se pliega en un contador ×N en vez de abrir otra tarjeta. La pata SMA horaria del setup Holy Grail viene del sidecar Node con velas horarias de TradingView (SMA5 de sesión regular, últimas 5 horas completadas): el setup solo se confirma si el spot está del lado correcto de esa media, y si el sidecar no está disponible el gate queda en ? y el setup no se confirma.</li>
       </ul>
       <button type="submit" class="btn solid">Entendido</button>
     </form>
@@ -509,11 +514,23 @@ function renderHero() {
     chip.textContent = label;
     checksEl.appendChild(chip);
   }
-  // Gates estilo BladeMap (frescura, dirección, respaldo, explicado)
+  // Tendencia 1h TradingView (SMA5 horaria del Holy Grail)
+  const tr = state?.trend;
+  if (tr && tr.sma5 != null) {
+    $("#v-trend-sma").textContent = `$${fmtNum(tr.sma5, 2)}`;
+    const posTxt = tr.position === "above" ? "Spot por encima" : tr.position === "below" ? "Spot por debajo" : "Spot en la SMA";
+    const distTxt = tr.distance_pct >= 0 ? `+${tr.distance_pct}%` : `${tr.distance_pct}%`;
+    $("#v-trend-sub").textContent = `${posTxt} (${distTxt}) · barra ${tr.last_bar_et || "?"}${tr.stale ? " · obsoleto" : ""}`;
+  } else {
+    $("#v-trend-sma").textContent = "—";
+    $("#v-trend-sub").textContent = tr?.error || "Sin tendencia horaria";
+  }
+
+  // Gates estilo BladeMap (frescura, dirección, respaldo, explicado, SMA horaria)
   for (const g of state?.gates || []) {
     const chip = document.createElement("span");
     chip.className = "check" + (g.ok ? " on" : "");
-    chip.textContent = `${g.ok ? "✓" : "✗"} Gate ${g.label}: ${g.detail}`;
+    chip.textContent = `${g.ok == null ? "?" : (g.ok ? "✓" : "✗")} Gate ${g.label}: ${g.detail}`;
     checksEl.appendChild(chip);
   }
 

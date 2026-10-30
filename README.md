@@ -40,8 +40,8 @@ python -m flow scan NVDA    # escaneo directo de cualquier ticker (NVDA, TSLA, S
    - **Sellos BladeMap (`bm_badge`, NO confundir con `ai_grade`)**: Whale ≥ $1M; Golden ≥ $900K y 2–30% OTM; Silver ≥ $300K con etiqueta de convicción (barrido o volumen > OI). La pata "5× sobre la norma" no se calcula: el snapshot no trae media de volumen por contrato y no se finge.
    - **Lectura Apertura/Cierre (`open_close`)**: dirección OPRA real (BTO/STO = apertura, BTC/STC = cierre) o ΔOI en cadena.
    - **OI sintético (`synthetic_oi`)**: OI oficial + flujo firmado del día por strike (compra suma, venta resta). Proxy, no OI oficial.
-   - **Gates y setup (`gates`, `setup_update`)**: frescura (retraso declarado), dirección, respaldo (≥2 prints votando o racha ≥2), explicado. Setup confirmado = gates en verde + ciclo en Confirmado; la misma clave dirección:etapa se pliega en un contador ×N (estilo Sentinel) en vez de abrir otra tarjeta.
-   - **NO implementado (y por qué)**: la pata SMA horaria del setup Holy Grail (el escáner no tiene velas horarias); un Vector supertrend 5m de precio (el backtest `strategy-search/backtest-vector-tv.mjs` sobre MU 5m extendido, 21-sep → 30-oct-2026, muestra que mult 3/4 no gira nunca, mult 2 gira 5 veces en gaps de sesión y mult ≤1.5 es ruido con ~50% de supervivencia a 60 min: sin filo demostrable); chat Barry (la síntesis Gemini opcional ya cubre ese papel); nada de Academy, Discord, Whop o facturación (no son el escáner).
+   - **Gates y setup (`gates`, `setup_update`)**: frescura (retraso declarado), dirección, respaldo (≥2 prints votando o racha ≥2), explicado y SMA horaria (pata Holy Grail: el spot debe estar del lado correcto de la SMA5 horaria de TradingView; si el sidecar no está disponible el gate queda en ? y bloquea la confirmación, porque nada sin verificar confirma). Setup confirmado = gates en verde + ciclo en Confirmado; la misma clave dirección:etapa se pliega en un contador ×N (estilo Sentinel) en vez de abrir otra tarjeta.
+   - **NO implementado (y por qué)**: un Vector supertrend 5m de precio (el backtest `strategy-search/backtest-vector-tv.mjs` sobre MU 5m extendido, 21-sep → 30-oct-2026, muestra que mult 3/4 no gira nunca, mult 2 gira 5 veces en gaps de sesión y mult ≤1.5 es ruido con ~50% de supervivencia a 60 min: sin filo demostrable); chat Barry (la síntesis Gemini opcional ya cubre ese papel); nada de Academy, Discord, Whop o facturación (no son el escáner).
 
 ## Fuente de prints: OPRA (CaymanBot) + respaldo Cboe
 
@@ -50,3 +50,13 @@ python -m flow scan NVDA    # escaneo directo de cualquier ticker (NVDA, TSLA, S
 - **Respaldo**: si OPRA falla o viene vacía, los prints salen de la cadena delayed de Cboe (lado inferido) como antes. Niveles, GEX y spot siempre salen de la cadena Cboe.
 - **Fragilidad**: el endpoint es interno y no documentado (CaymanBot dice no tener API pública); puede cambiar, limitar o romperse sin aviso. Por eso el respaldo Cboe siempre está activo.
 - **Filtro**: solo entran trades con prima ≥ $50K; la cinta del día se limita a los 500 de mayor prima.
+
+## Tendencia horaria: sidecar Node + TradingView (pata SMA del Holy Grail)
+
+El escáner es Python y la librería de TradingView (`@mathieuc/tradingview`) es Node, así que la SMA5 horaria vive en un sidecar: `tv/tv-hourly.mjs` (velas 1h de sesión regular, últimas 5 horas completadas; la barra en formación se excluye) invocado por `flow/tv_hourly.py` como subprocess. La tendencia (`trend` en el estado) trae SMA5, último cierre, barra, posición del spot en vivo frente a la media y distancia %; el gate SMA exige el lado correcto según la dirección (alcista: por encima; bajista: por debajo).
+
+- **Requisito**: Node ≥ 20 en el PATH. `iniciar.bat` avisa si falta Node e instala `tv/node_modules` con npm si no existe. Sin Node, el escáner funciona entero salvo este gate, que queda en ? y bloquea la confirmación del setup.
+- **Caché**: por ticker, 15 min, más refresco cuando se completa una hora nueva en horario regular. El sidecar no se llama en lecturas de `/api/state`, solo dentro de `run_scan`.
+- **Fallo sin bloquear**: si el sidecar falla, se reutiliza el último valor marcado como obsoleto; si no hay ninguno, `trend` trae el error y el gate queda en ?. Un fallo de tendencia nunca marca el scan como error.
+- **Variables**: `TV_NODE_CMD` (comando node, por defecto `node`); `TV_USE_RAW_TRANSPORT=1` solo para el sandbox de desarrollo, donde el proxy rompe el handshake websocket normal (en Windows no hace falta).
+- **Mercados**: mapa en el script para los 11 tickers por defecto (SPY en AMEX, resto NASDAQ); un ticker desconocido prueba NASDAQ, NYSE y AMEX en ese orden.
