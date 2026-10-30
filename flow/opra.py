@@ -142,6 +142,14 @@ def trade_to_print(
     side = _trade_side(t)
     sweep = bool(t.get("is_sweep"))
     whale = bool(t.get("is_whale_activity"))
+    direction = str(t.get("trade_direction") or "").upper()
+    # Lectura Apertura/Cierre REAL (no inferida): BTO/STO abren,
+    # BTC/STC cierran. Sin dirección, desconocido.
+    open_close = (
+        "OPEN" if direction in ("BTO", "STO")
+        else "CLOSE" if direction in ("BTC", "STC")
+        else "UNKNOWN"
+    )
     ratio = (size / oi) if oi > 0 else 1.0
     conv = engine.conviction(premium, ratio, None, side, sweep)
     if whale:
@@ -169,6 +177,8 @@ def trade_to_print(
         "dte": dte,
         "otm_pct": engine.otm_pct(cp, strike, spot),
         "side": side,  # lado REAL OPRA, no inferido
+        "trade_direction": direction or None,
+        "open_close": open_close,
         "delta_vol": size,
         "volume": int(t.get("volume") or 0),
         "open_interest": oi,

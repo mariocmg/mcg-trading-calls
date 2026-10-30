@@ -94,6 +94,11 @@
               <span id="v-inv-arrow" class="inv-arrow"></span>
             </span>
           </div>
+          <div class="stat">
+            <span class="mini">Vector · Ciclo (Flip → Follow → Confirm)</span>
+            <strong id="v-vector-stage" class="stage-text">—</strong>
+            <span id="v-vector-sub" class="mini">—</span>
+          </div>
         </div>
       </div>
 
@@ -309,6 +314,7 @@
           </ul>
         </li>
         <li><strong>4. Modo Stand Down</strong> — Igual que en BladeMap, cuando el flujo neto ponderado no supera los $500K o hay equilibrio entre compradores y vendedores, el sistema indica <strong>STAND DOWN</strong> (no forzar operaciones).</li>
+        <li><strong>5. Ciclo Vector, sellos BM, OI sintético y gates</strong> — El Vector sigue su ciclo por scans (Giro → Construyendo → Confirmado) con frescura según minutos desde el giro. Cada print lleva además un sello BladeMap (Whale ≥ $1M; Golden ≥ $900K y 2–30% OTM; Silver ≥ $300K con etiqueta de convicción) y lectura Apertura/Cierre (dirección OPRA real o ΔOI en cadena). El OI sintético suma el flujo firmado del día al OI oficial por strike. Los cuatro gates (frescura, dirección, respaldo, explicado) deben estar en verde y el ciclo en Confirmado para que el setup cuente como confirmado; la misma clave dirección:etapa se pliega en un contador ×N en vez de abrir otra tarjeta. La pata SMA horaria del setup Holy Grail no está implementada: el escáner no tiene velas horarias.</li>
       </ul>
       <button type="submit" class="btn solid">Entendido</button>
     </form>
@@ -421,7 +427,7 @@ function renderHero() {
   const nSweeps = state?.sweeps_today || 0;
   const kept = v?.n_ai_kept ?? v?.n_voted ?? 0;
   badge.textContent = v
-    ? `${sym} · ${kept} jugadas IA limpias (${v.n_ai_filtered || 0} descartadas por ruido)${nSweeps ? ` · ${nSweeps} barridos` : ""}`
+    ? `${sym} · ${kept} jugadas IA limpias (${v.n_ai_filtered || 0} descartadas por ruido)${nSweeps ? ` · ${nSweeps} barridos` : ""}${state?.setup && state.setup.count > 1 ? ` · setup ×${state.setup.count}` : ""}${state?.setup?.ready ? " · SETUP CONFIRMADO" : ""}`
     : "—";
   badge.className = "pill " + (dirClass === "BULLISH" ? "aligned" : dirClass === "BEARISH" ? "noisy" : "");
 
@@ -470,6 +476,20 @@ function renderHero() {
   arrow.textContent = inv ? (inv.arrow === "up" ? "↑" : "↓") : "";
   arrow.className = "inv-arrow " + (inv?.arrow || "");
 
+  // Vector · Ciclo (Flip → Follow → Confirm) + frescura + caídas
+  const vec = state?.vector;
+  if (vec && vec.stage) {
+    $("#v-vector-stage").textContent = vec.stage === "NONE" ? "Sin dirección" : (vec.stage_label || vec.stage);
+    const subParts = [];
+    if (vec.freshness_label) subParts.push(`${vec.freshness_label}${vec.age_min != null ? ` · giro hace ${Math.round(vec.age_min)} min` : ""}`);
+    if (vec.stage_drops) subParts.push(`${vec.stage_drops} caídas de etapa hoy`);
+    if (state?.setup && state.setup.count > 1) subParts.push(`setup ×${state.setup.count}`);
+    $("#v-vector-sub").textContent = subParts.join(" · ") || "—";
+  } else {
+    $("#v-vector-stage").textContent = "—";
+    $("#v-vector-sub").textContent = "—";
+  }
+
   const checksEl = $("#v-checks");
   checksEl.textContent = "";
   const b = state?.book;
@@ -487,6 +507,13 @@ function renderHero() {
     const chip = document.createElement("span");
     chip.className = "check" + (ok ? " on" : "");
     chip.textContent = label;
+    checksEl.appendChild(chip);
+  }
+  // Gates estilo BladeMap (frescura, dirección, respaldo, explicado)
+  for (const g of state?.gates || []) {
+    const chip = document.createElement("span");
+    chip.className = "check" + (g.ok ? " on" : "");
+    chip.textContent = `${g.ok ? "✓" : "✗"} Gate ${g.label}: ${g.detail}`;
     checksEl.appendChild(chip);
   }
 
@@ -583,6 +610,15 @@ function renderPositioningMap() {
     $("#lv-call-wall-sub").textContent = "—";
     $("#lv-maxpain").textContent = "—";
     $("#lv-maxpain-exp").textContent = "—";
+  }
+
+  // OI sintético: el muro que más empuja el flujo de hoy
+  const syn = lv?.synthetic;
+  if (syn?.top_put) {
+    $("#lv-put-wall-sub").textContent += ` · OI sintético máx $${fmtNum(syn.top_put.strike, 1)} (${fmtNum(syn.top_put.syn_oi)})`;
+  }
+  if (syn?.top_call) {
+    $("#lv-call-wall-sub").textContent += ` · OI sintético máx $${fmtNum(syn.top_call.strike, 1)} (${fmtNum(syn.top_call.syn_oi)})`;
   }
 
   if (pos.target_strike != null) {
@@ -715,10 +751,10 @@ function renderFeed() {
     }
     row.appendChild(intentWrap);
 
-    // Columna Grado / Score IA
+    // Columna Grado / Score IA (+ sello BladeMap)
     const grade = p.ai_grade || "SILVER";
     const conv = p.conviction != null ? p.conviction : "—";
-    row.appendChild(span(`ia grade-${grade}`, `${grade} · ${conv}`, p.ai_reason || ""));
+    row.appendChild(span(`ia grade-${grade}`, `${grade} · ${conv}${p.bm_badge ? ` · BM ${p.bm_badge}` : ""}`, p.ai_reason || ""));
 
     // Columna Flags / Microestructura
     const flags = document.createElement("span");
@@ -733,6 +769,17 @@ function renderFeed() {
       const el = document.createElement("i");
       el.className = "flag combo";
       el.textContent = "BARRIDO";
+      flags.appendChild(el);
+    }
+    if (p.open_close === "OPEN") {
+      const el = document.createElement("i");
+      el.className = "flag new-pos";
+      el.textContent = "APERTURA";
+      flags.appendChild(el);
+    } else if (p.open_close === "CLOSE") {
+      const el = document.createElement("i");
+      el.className = "flag";
+      el.textContent = "CIERRE";
       flags.appendChild(el);
     }
     if (p.delta != null) {

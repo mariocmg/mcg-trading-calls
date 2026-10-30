@@ -35,6 +35,14 @@ python -m flow scan NVDA    # escaneo directo de cualquier ticker (NVDA, TSLA, S
    - **Multi-Ticker**: Selector rápido (`MU`, `NVDA`, `TSLA`, `SPY`, `QQQ`, `AMD`, `AAPL`, `META`, `AMZN`, `MSFT`, `PLTR`) más buscador para cualquier ticker.
    - **Síntesis LLM Opcional**: Si defines `GEMINI_API_KEY` en `.env`, añade un resumen ejecutivo generado por Gemini 2.5 Flash; sin API key, funciona al 100% con el motor determinista local.
 
+4. **Ciclo Vector, sellos BM, OI sintético, gates y setup (aplicación BladeMap, 2026-10-30)**:
+   - **Ciclo Vector (`vector_update`)**: por ticker y día, etapa por scans consecutivos en la misma dirección (1 = Giro/Flip, 2 = Construyendo/Follow, 3+ = Confirmado/Confirm) con frescura por minutos desde el giro (≤15 Reciente, ≤45 Activo, ≤90 Envejeciendo, resto Entrada tardía) y conteo de caídas de etapa. No cruza días. Es distinto de la etapa del veredicto (EARLY/BUILDING/CONFIRMED por confianza): ambas se muestran con nombres distintos.
+   - **Sellos BladeMap (`bm_badge`, NO confundir con `ai_grade`)**: Whale ≥ $1M; Golden ≥ $900K y 2–30% OTM; Silver ≥ $300K con etiqueta de convicción (barrido o volumen > OI). La pata "5× sobre la norma" no se calcula: el snapshot no trae media de volumen por contrato y no se finge.
+   - **Lectura Apertura/Cierre (`open_close`)**: dirección OPRA real (BTO/STO = apertura, BTC/STC = cierre) o ΔOI en cadena.
+   - **OI sintético (`synthetic_oi`)**: OI oficial + flujo firmado del día por strike (compra suma, venta resta). Proxy, no OI oficial.
+   - **Gates y setup (`gates`, `setup_update`)**: frescura (retraso declarado), dirección, respaldo (≥2 prints votando o racha ≥2), explicado. Setup confirmado = gates en verde + ciclo en Confirmado; la misma clave dirección:etapa se pliega en un contador ×N (estilo Sentinel) en vez de abrir otra tarjeta.
+   - **NO implementado (y por qué)**: la pata SMA horaria del setup Holy Grail (el escáner no tiene velas horarias); un Vector supertrend 5m de precio (el backtest `strategy-search/backtest-vector-tv.mjs` sobre MU 5m extendido, 21-sep → 30-oct-2026, muestra que mult 3/4 no gira nunca, mult 2 gira 5 veces en gaps de sesión y mult ≤1.5 es ruido con ~50% de supervivencia a 60 min: sin filo demostrable); chat Barry (la síntesis Gemini opcional ya cubre ese papel); nada de Academy, Discord, Whop o facturación (no son el escáner).
+
 ## Fuente de prints: OPRA (CaymanBot) + respaldo Cboe
 
 - **Primaria: cinta OPRA** — `GET https://app.caymanbot.com/api/v1/trades?limit=200&symbol=MU`, sin sesión ni API key. Lado real de cada trade, flags whale/sweep/unusual, multileg (`strategy_*`) y `unique_id` para deduplicar. Una página por scan (200 trades recientes) acumulada por `unique_id`.

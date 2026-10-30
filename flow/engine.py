@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from datetime import datetime
 from typing import Any
 from urllib.request import Request, urlopen
 
@@ -157,6 +158,55 @@ def conviction(
     return max(0, min(100, round(score)))
 
 
+# --- Badges estilo BladeMap Pulse (umbrales del teardown, NO los del
+# clasificador IA propio: ai_grade usa convicción ≥82/70/55 y prima
+# ≥$250K; estos usan solo prima + distancia OTM + etiqueta de
+# convicción, para que la comparativa sea legible en la misma fila). ---
+BM_WHALE_PREMIUM = 1_000_000  # Whale = tamaño, sin condición OTM
+BM_GOLDEN_PREMIUM = 900_000   # Golden = calidad: prima alta y 2–30% OTM
+BM_GOLDEN_OTM_MIN = 2.0
+BM_GOLDEN_OTM_MAX = 30.0
+BM_SILVER_PREMIUM = 300_000   # Silver = prima + etiqueta de convicción
+
+
+def blademap_badge(
+    premium: float,
+    otm: float | None,
+    has_conviction_tag: bool,
+) -> str | None:
+    """Sello BladeMap de un print: WHALE / GOLDEN / SILVER / None.
+
+    Orden BladeMap: primero tamaño (Whale ≥ $1M), luego calidad
+    (Golden ≥ $900K y 2–30% OTM), luego Silver (≥ $300K + etiqueta
+    de convicción: barrido o volumen > OI). Sin esas condiciones no
+    hay sello, aunque el print pase el filtro de prima mínima.
+    """
+    if premium >= BM_WHALE_PREMIUM:
+        return "WHALE"
+    if (
+        premium >= BM_GOLDEN_PREMIUM
+        and otm is not None
+        and BM_GOLDEN_OTM_MIN <= otm <= BM_GOLDEN_OTM_MAX
+    ):
+        return "GOLDEN"
+    if premium >= BM_SILVER_PREMIUM and has_conviction_tag:
+        return "SILVER"
+    return None
+
+
+def open_close_from_doi(d_oi: int | None) -> str:
+    """Lectura Apertura/Cierre desde ΔOI (cadena): subir = apertura,
+    bajar = cierre, sin dato = desconocido. En modo OPRA la lectura
+    viene de trade_direction (ver opra.trade_to_print) y no se toca."""
+    if d_oi is None:
+        return "UNKNOWN"
+    if d_oi > 0:
+        return "OPEN"
+    if d_oi < 0:
+        return "CLOSE"
+    return "UNKNOWN"
+
+
 def _estimate_abs_delta(call_put: str, otm: float | None, raw_delta: float | None) -> float:
     """Usa el delta real de Cboe si existe; si no, lo aproxima desde % OTM."""
     if raw_delta is not None and 0 < abs(raw_delta) <= 1.0:
@@ -203,6 +253,13 @@ def classify_prints_ai(
         delta_vol = int(p.get("delta_vol") or 0)
         oi = int(p.get("open_interest") or 0)
         abs_delta = _estimate_abs_delta(cp, otm, p.get("delta"))
+
+        # Sello BladeMap (prima + OTM + etiqueta de convicción). La
+        # etiqueta aquí es barrido o volumen > OI; la pata "5x sobre
+        # la norma" no se puede calcular desde el snapshot (no hay
+        # media de volumen por contrato), así que no se finge.
+        has_tag = sweep or (oi > 0 and delta_vol >= oi)
+        p["bm_badge"] = blademap_badge(prem, otm, has_tag)
 
         # Exposición equivalente en dólares de subyacente (Delta-Adjusted Flow)
         if spot and spot > 0:
@@ -405,6 +462,7 @@ def detect_prints(
                 "volume": r["volume"],
                 "open_interest": oi,
                 "d_oi": d_oi,
+                "open_close": open_close_from_doi(d_oi),
                 "is_new_position": bool(d_oi is not None and d_oi > 0),
                 "premium": round(premium),
                 "sweep": False,
@@ -449,6 +507,7 @@ def merge_day_prints(
         old["volume"] = p["volume"]
         old["open_interest"] = p["open_interest"]
         old["d_oi"] = p["d_oi"]
+        old["open_close"] = open_close_from_doi(p["d_oi"])
         if old.get("side") == "unknown" and p.get("side") in ("buy", "sell"):
             old["side"] = p["side"]
         for k in ("delta", "gamma", "iv", "theo"):
@@ -575,6 +634,217 @@ def verdict(prints: list[dict[str, Any]], streak: int = 1) -> dict[str, Any]:
     }
 
 
+# --- Vector ciclo de vida (estilo BladeMap: flip -> follow -> confirm) ---
+# La etapa del veredicto (EARLY/BUILDING/CONFIRMED) ya existía y se
+# basa en racha + confianza + nº de prints; el ciclo Vector es otra
+# cosa: etapa por scans consecutivos en la misma dirección (1 = giro,
+# 2 = construyendo, 3+ = confirmado) y frescura por minutos desde el
+# giro. Ambos se muestran, con nombres distintos, para no mezclarlos.
+VECTOR_FRESH_MIN = 15
+VECTOR_ACTIVE_MIN = 45
+VECTOR_AGING_MIN = 90
+
+VECTOR_STAGE_LABELS = {
+    "FLIP": "Giro (Flip)",
+    "FOLLOW": "Construyendo (Follow)",
+    "CONFIRM": "Confirmado (Confirm)",
+    "NONE": "Sin dirección",
+}
+
+VECTOR_FRESHNESS_LABELS = {
+    "FRESH": "Reciente",
+    "ACTIVE": "Activo",
+    "AGING": "Envejeciendo",
+    "LATE": "Entrada tardía",
+}
+
+
+def _parse_iso(iso: str | None) -> datetime | None:
+    if not iso:
+        return None
+    try:
+        return datetime.fromisoformat(str(iso))
+    except ValueError:
+        return None
+
+
+def vector_age_min(flipped_at: str | None, now_iso: str) -> float | None:
+    """Minutos desde el giro (None si no hay marca temporal válida)."""
+    a = _parse_iso(flipped_at)
+    b = _parse_iso(now_iso)
+    if a is None or b is None:
+        return None
+    return max(0.0, round((b - a).total_seconds() / 60.0, 1))
+
+
+def vector_freshness(age_min: float | None) -> tuple[str | None, str | None]:
+    """Tramo de frescura BladeMap por edad del giro."""
+    if age_min is None:
+        return None, None
+    if age_min <= VECTOR_FRESH_MIN:
+        return "FRESH", VECTOR_FRESHNESS_LABELS["FRESH"]
+    if age_min <= VECTOR_ACTIVE_MIN:
+        return "ACTIVE", VECTOR_FRESHNESS_LABELS["ACTIVE"]
+    if age_min <= VECTOR_AGING_MIN:
+        return "AGING", VECTOR_FRESHNESS_LABELS["AGING"]
+    return "LATE", VECTOR_FRESHNESS_LABELS["LATE"]
+
+
+def vector_update(prev: dict[str, Any] | None, direction: str, streak: int, now_iso: str) -> dict[str, Any]:
+    """Ciclo Vector de un scan. El servidor pasa prev=None al cambiar
+    de sesión para que la racha y las caídas no crucen días."""
+    prev = prev or {}
+    prev_dir = prev.get("direction")
+    if direction == "NEUTRAL":
+        stage, stage_label = "NONE", VECTOR_STAGE_LABELS["NONE"]
+        flipped_at = now_iso
+        drops = int(prev.get("stage_drops") or 0)
+    else:
+        # Cambio de dirección confirmado -> FLIP aunque la racha diga
+        # otra cosa; sin previo conocido, manda la racha guardada
+        # (un estado viejo con racha 3 ya viene confirmado).
+        if prev_dir is not None and prev_dir != direction:
+            stage = "FLIP"
+        elif streak <= 1:
+            stage = "FLIP"
+        elif streak == 2:
+            stage = "FOLLOW"
+        else:
+            stage = "CONFIRM"
+        stage_label = VECTOR_STAGE_LABELS[stage]
+        if prev_dir == direction and prev.get("flipped_at"):
+            flipped_at = prev["flipped_at"]
+        else:
+            flipped_at = now_iso
+        drops = int(prev.get("stage_drops") or 0)
+        if prev_dir not in (None, "NEUTRAL", direction):
+            drops += 1
+    age = vector_age_min(flipped_at, now_iso) if direction != "NEUTRAL" else None
+    fresh, fresh_label = vector_freshness(age)
+    return {
+        "direction": direction,
+        "stage": stage,
+        "stage_label": stage_label,
+        "flipped_at": flipped_at,
+        "age_min": age,
+        "freshness": fresh,
+        "freshness_label": fresh_label,
+        "stage_drops": drops,
+        "streak": streak,
+    }
+
+
+def vector_refresh(vector: dict[str, Any] | None, now_iso: str) -> dict[str, Any] | None:
+    """Recalcula edad/frescura de un vector guardado sin cambiar su
+    etapa (para estados viejos leídos sin scan nuevo)."""
+    if not vector:
+        return vector
+    v = dict(vector)
+    if v.get("direction") != "NEUTRAL" and v.get("flipped_at"):
+        v["age_min"] = vector_age_min(v["flipped_at"], now_iso)
+        fresh, fresh_label = vector_freshness(v["age_min"])
+        v["freshness"] = fresh
+        v["freshness_label"] = fresh_label
+    return v
+
+
+def gates(verdict_: dict[str, Any], delay_minutes: int | None) -> list[dict[str, Any]]:
+    """Cuatro gates estilo BladeMap, honestos sobre lo que miden:
+    - Frescura: la fuente declara su retraso (no se finge tiempo real).
+    - Dirección: hay dirección no neutral.
+    - Respaldo: al menos 2 prints votando o racha ≥ 2 scans.
+    - Explicado: el veredicto trae evidencia distinta del texto vacío.
+    """
+    out = []
+    if delay_minutes is not None:
+        out.append({"key": "fresh", "label": "Frescura", "ok": True,
+                    "detail": f"Retraso declarado: {delay_minutes} min"})
+    else:
+        out.append({"key": "fresh", "label": "Frescura", "ok": False,
+                    "detail": "Fuente sin retraso declarado"})
+    direction = verdict_.get("direction", "NEUTRAL")
+    out.append({"key": "direction", "label": "Dirección", "ok": direction != "NEUTRAL",
+                "detail": direction})
+    n_voted = int(verdict_.get("n_voted") or 0)
+    streak = int(verdict_.get("streak") or 1)
+    out.append({"key": "backing", "label": "Respaldo",
+                "ok": n_voted >= 2 or streak >= 2,
+                "detail": f"{n_voted} prints votando · racha {streak}"})
+    ev = verdict_.get("evidence") or ""
+    out.append({"key": "explained", "label": "Explicado",
+                "ok": bool(ev) and ev != "Sin prints inusuales hoy.",
+                "detail": ev[:80]})
+    return out
+
+
+def setup_update(prev_setup: dict[str, Any] | None, direction: str, stage: str, gates_: list[dict[str, Any]]) -> dict[str, Any]:
+    """Setup estilo Sentinel: misma clave dirección:etapa que el scan
+    anterior suma al contador (plegado ×N) en vez de abrir otra
+    tarjeta; clave distinta reinicia a 1. ready exige todos los
+    gates en verde Y etapa Confirm. La pata SMA horaria del Holy
+    Grail NO está aquí: el escáner no tiene velas horarias, así que
+    el setup es Pulse+Vector, no el setup completo."""
+    key = f"{direction}:{stage}"
+    prev = prev_setup or {}
+    count = int(prev.get("count") or 0) + 1 if prev.get("key") == key else 1
+    ready = bool(gates_) and all(g.get("ok") for g in gates_) and stage == "CONFIRM"
+    return {"key": key, "count": count, "ready": ready,
+            "label": "SETUP CONFIRMADO" if ready else "Setup en formación"}
+
+
+def synthetic_oi(levels_: dict[str, Any] | None, prints: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """OI sintético estilo BladeMap: OI oficial de la cadena + flujo
+    neto firmado de los prints del día por strike (compra suma,
+    venta resta, sin sesgo no cuenta). Es un proxy, no OI oficial:
+    solo mide cuánto empuja el flujo de hoy sobre cada muro."""
+    if not levels_:
+        return None
+
+    def _as_float_map(official: dict) -> dict[float, int]:
+        out: dict[float, int] = {}
+        for k, v in (official or {}).items():
+            try:
+                out[float(k)] = int(v)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    syn_call = _as_float_map(levels_.get("call_oi") or {})
+    syn_put = _as_float_map(levels_.get("put_oi") or {})
+    for p in prints or []:
+        side = p.get("side")
+        if side not in ("buy", "sell"):
+            continue
+        dv = int(p.get("delta_vol") or 0)
+        if dv <= 0:
+            continue
+        try:
+            strike = float(p.get("strike") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not strike:
+            continue
+        signed = dv if side == "buy" else -dv
+        if p.get("call_put") == "C":
+            syn_call[strike] = syn_call.get(strike, 0) + signed
+        elif p.get("call_put") == "P":
+            syn_put[strike] = syn_put.get(strike, 0) + signed
+
+    def _top(syn: dict[float, int], official: dict[float, int]) -> dict[str, Any] | None:
+        if not syn:
+            return None
+        strike = max(syn.items(), key=lambda kv: kv[1])[0]
+        return {"strike": strike, "oi": int(official.get(strike, 0)),
+                "syn_oi": int(syn[strike])}
+
+    return {
+        "call": {f"{k:g}": v for k, v in syn_call.items()},
+        "put": {f"{k:g}": v for k, v in syn_put.items()},
+        "top_call": _top(syn_call, _as_float_map(levels_.get("call_oi") or {})),
+        "top_put": _top(syn_put, _as_float_map(levels_.get("put_oi") or {})),
+    }
+
+
 def invalidation(
     direction: str, levels_: dict[str, Any] | None, spot: float | None
 ) -> dict[str, Any] | None:
@@ -617,6 +887,10 @@ def normalize_print(p: dict[str, Any], spot: float | None = None) -> dict[str, A
     p.setdefault("d_oi", None)
     p.setdefault("is_new_position", False)
     p.setdefault("sweep", False)
+    if p.get("open_close") is None:
+        # OPRA trae su propia lectura (trade_direction); la cadena
+        # usa ΔOI. No sobrescribir la que ya venga puesta.
+        p["open_close"] = open_close_from_doi(p.get("d_oi"))
     p.setdefault("times_seen", 1)
     p.setdefault("first_seen", None)
     p.setdefault("last_seen", None)

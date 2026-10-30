@@ -63,6 +63,28 @@ def _enrich_legacy_state(state: dict[str, Any]) -> dict[str, Any]:
     state["book"] = engine.book_stats(prints)
     if "positioning" not in state or not state["positioning"]:
         state["positioning"] = engine.positioning_map(prints, levels_, v, spot)
+    # Vector/gates/setup/sintético para estados viejos: el vector se
+    # refresca (edad/frescura) sin cambiar de etapa; el setup guardado
+    # se conserva tal cual (recalcularlo en cada lectura inflaría el
+    # contador, porque /api/state no guarda).
+    now_iso = store.now_iso_et()
+    if state.get("vector"):
+        state["vector"] = engine.vector_refresh(state["vector"], now_iso)
+    else:
+        state["vector"] = engine.vector_refresh(
+            engine.vector_update(
+                None, v["direction"], int(v.get("streak") or 1),
+                state.get("updated_at") or now_iso,
+            ),
+            now_iso,
+        )
+    state["gates"] = engine.gates(v, state.get("prints_delay_minutes"))
+    if not state.get("setup"):
+        state["setup"] = engine.setup_update(
+            None, v["direction"], state["vector"]["stage"], state["gates"]
+        )
+    if levels_ is not None:
+        levels_["synthetic"] = engine.synthetic_oi(levels_, prints)
     state.setdefault("available_tickers", DEFAULT_TICKERS)
     return state
 
@@ -137,6 +159,20 @@ def run_scan(ticker: str | None = None) -> dict[str, Any]:
     levels_ = engine.levels(rows)
     sweeps_today = sum(1 for p in day_prints if p.get("sweep"))
     verdict_["invalidation"] = engine.invalidation(verdict_["direction"], levels_, spot)
+
+    # Ciclo Vector + gates + setup (estilo BladeMap). El vector no
+    # cruza días: si el estado previo es de otra sesión, se reinicia.
+    prev_vector = prev_state.get("vector") if prev_state.get("date") == today else None
+    vector_ = engine.vector_update(
+        prev_vector, verdict_["direction"], streak, store.now_iso_et()
+    )
+    gates_ = engine.gates(verdict_, prints_delay)
+    prev_setup = prev_state.get("setup") if prev_state.get("date") == today else None
+    setup_ = engine.setup_update(
+        prev_setup, verdict_["direction"], vector_["stage"], gates_
+    )
+    if levels_ is not None:
+        levels_["synthetic"] = engine.synthetic_oi(levels_, day_prints)
     pos_map = engine.positioning_map(day_prints, levels_, verdict_, spot)
     llm_note = engine.maybe_llm_synthesis(sym, spot, verdict_, pos_map, levels_, day_prints)
     if llm_note:
@@ -150,6 +186,9 @@ def run_scan(ticker: str | None = None) -> dict[str, Any]:
         "spot_change_pct": spot_change_pct,
         "iv30": iv30,
         "verdict": verdict_,
+        "vector": vector_,
+        "gates": gates_,
+        "setup": setup_,
         "positioning": pos_map,
         "prints": day_prints,
         "levels": levels_,
