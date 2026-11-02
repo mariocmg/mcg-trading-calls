@@ -551,6 +551,113 @@ def _signed_ai_weighted(p: dict[str, Any]) -> float:
     return _signed_weighted(p) * w
 
 
+# --- Filtro Pulse: qué prints son institucionales (estilo BladeMap Pulse). ---
+# Un print cuenta como institucional si su score 0-10 llega a
+# PULSE_KEEP_THRESHOLD (7, el ajuste de operador de BladeMap: filtrar 7+).
+# Componentes, todos observables en OPRA/Cboe:
+# - Prima: >=$1M 3, >=$500k 2, >=$250k 1.
+# - Volumen vs OI: delta_vol >= OI 2, >= 0.5xOI 1 (sin OI no puntúa).
+# - Barrido (sweep) 1. Cluster 90 s (mismo contrato, OPRA) 2.
+# - Apertura (OPEN o d_oi > 0) 1.
+# - Banda OTM 2-30% 1.
+# Cierres (CLOSE o d_oi < 0) y prints sin lado puntúan 0 siempre: no son
+# posicionamiento nuevo. Lo que NO se puede calcular no se finge: el
+# "volumen relativo 5x sobre la norma" exige una media de volumen por
+# contrato que el snapshot no trae, así que no puntúa (ver README).
+# El clasificador viejo (classify_prints_ai) sigue corriendo y poniendo
+# etiquetas, pero YA NO DECIDE: lo que decide es este score.
+PULSE_KEEP_THRESHOLD = 7
+PULSE_CLUSTER_WINDOW_S = 90
+PULSE_CLUSTER_MIN = 3  # trades del mismo contrato en la ventana (incluye este)
+
+
+def _pulse_cluster_bonus(prints: list[dict[str, Any]]) -> dict[int, int]:
+    """Bonus +2 por print si hay >=3 trades del mismo contrato en 90 s.
+
+    Solo OPRA trae timestamp por trade (trade_ts); los prints de cadena
+    son agregados por contrato y no participan (bonus 0).
+    """
+    by_contract: dict[str, list[tuple[float, int]]] = {}
+    for i, p in enumerate(prints):
+        ts = p.get("trade_ts")
+        if ts is None:
+            continue
+        try:
+            ts_f = float(ts)
+        except (TypeError, ValueError):
+            continue
+        by_contract.setdefault(str(p.get("contract") or ""), []).append((ts_f, i))
+    bonus: dict[int, int] = {}
+    for events in by_contract.values():
+        events.sort()
+        j = 0
+        for k in range(len(events)):
+            while events[k][0] - events[j][0] > PULSE_CLUSTER_WINDOW_S:
+                j += 1
+            if k - j + 1 >= PULSE_CLUSTER_MIN:
+                for m in range(j, k + 1):
+                    bonus[events[m][1]] = 2
+    return bonus
+
+
+def pulse_score(prints: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Puntúa cada print 0-10 y marca pulse_keep (score >= 7).
+
+    Escribe en cada print pulse_score, pulse_reasons y pulse_keep.
+    Devuelve la misma lista.
+    """
+    cluster = _pulse_cluster_bonus(prints)
+    for i, p in enumerate(prints):
+        side = p.get("side", "unknown")
+        oc = p.get("open_close")
+        d_oi = p.get("d_oi")
+        is_close = oc == "CLOSE" or (d_oi is not None and d_oi < 0)
+        if is_close or side not in ("buy", "sell"):
+            p["pulse_score"] = 0
+            p["pulse_reasons"] = ["cierre" if is_close else "sin lado"]
+            p["pulse_keep"] = False
+            continue
+        score = 0
+        reasons: list[str] = []
+        prem = float(p.get("premium") or 0)
+        if prem >= 1_000_000:
+            score += 3
+            reasons.append("prima ≥$1M")
+        elif prem >= 500_000:
+            score += 2
+            reasons.append("prima ≥$500k")
+        elif prem >= 250_000:
+            score += 1
+            reasons.append("prima ≥$250k")
+        oi = int(p.get("open_interest") or 0)
+        dv = int(p.get("delta_vol") or 0)
+        if oi > 0:
+            if dv >= oi:
+                score += 2
+                reasons.append("vol ≥ OI")
+            elif dv >= 0.5 * oi:
+                score += 1
+                reasons.append("vol ≥ 0.5×OI")
+        if p.get("sweep"):
+            score += 1
+            reasons.append("barrido")
+        if cluster.get(i):
+            score += 2
+            reasons.append("cluster 90s")
+        if oc == "OPEN" or (d_oi is not None and d_oi > 0):
+            score += 1
+            reasons.append("apertura")
+        otm = p.get("otm_pct")
+        if otm is not None and 2 <= float(otm) <= 30:
+            score += 1
+            reasons.append("OTM 2–30%")
+        score = min(10, score)
+        p["pulse_score"] = score
+        p["pulse_reasons"] = reasons
+        p["pulse_keep"] = score >= PULSE_KEEP_THRESHOLD
+    return prints
+
+
 def stage(direction: str, confidence: int, n_voted: int, streak: int) -> tuple[str, str, int]:
     """Etapa: (clave, etiqueta, puntos del track de 3). Ver docstring."""
     if (

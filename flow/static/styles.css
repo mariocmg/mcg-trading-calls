@@ -817,7 +817,7 @@ body {
 .tape-cols,
 .row {
   display: grid;
-  grid-template-columns: 0.9fr 1.05fr 0.45fr 0.75fr 1.65fr 1.05fr 1.25fr 0.55fr 0.95fr;
+  grid-template-columns: 1fr 1.2fr 0.5fr 0.9fr 1fr 0.7fr;
   gap: 0.35rem;
   padding: 0.65rem 0.2rem;
   align-items: center;
@@ -843,7 +843,8 @@ body {
 .row.muted-row { opacity: 0.55; }
 
 .row .sym { font-weight: 600; }
-.row .time, .row .otm, .row .dte { color: #9ca3af; }
+.row .time, .row .otm, .row .dte, .row .side { color: #9ca3af; }
+.row .score { font-weight: 700; }
 
 .intent-col {
   display: flex;
@@ -972,13 +973,11 @@ body {
 }
 
 @media (max-width: 600px) {
-  .filters, .lattice-grid, .book { grid-template-columns: 1fr; }
-  .tape-cols span:nth-child(7),
-  .tape-cols span:nth-child(8),
-  .row .flags,
-  .row .dte { display: none; }
+  .book { grid-template-columns: 1fr; }
+  .tape-cols span:nth-child(4),
+  .row .side { display: none; }
   .tape-cols,
   .row {
-    grid-template-columns: 0.85fr 1fr 0.4fr 0.7fr 1.4fr 0.9fr 0.9fr;
+    grid-template-columns: 0.9fr 1.1fr 0.4fr 1fr 0.6fr;
   }
 }

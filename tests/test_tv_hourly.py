@@ -140,5 +140,8 @@ def test_enrich_never_calls_sidecar(monkeypatch):
         "prints_delay_minutes": 60, "updated_at": "2026-10-29T20:00:00-04:00",
     }
     out = _enrich_legacy_state(state)
-    assert out["trend"]["sma5"] == 935.31
-    assert any(x["key"] == "sma" for x in out["gates"])
+    # La página simple ya no usa gates ni tendencia: enrich no los
+    # reconstruye (y mucho menos llama al sidecar para ello).
+    assert "gates" not in out
+    assert out["pulse"] == {"kept": 0, "discarded": 0, "threshold": 7}
+    assert out["verdict"]["direction"] == "NEUTRAL"  # sin prints kept no hay dirección

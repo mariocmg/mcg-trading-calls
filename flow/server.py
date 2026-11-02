@@ -1,14 +1,18 @@
-"""Servidor web: interfaz estilo BladeMap AI + bucle de escaneo.
+"""Servidor web: página simple + bucle de escaneo.
 
 - GET  /                  -> la página (flow/static/index.html)
 - GET  /static/*          -> CSS
 - GET  /api/state         -> último estado del ticker (?ticker=MU)
 - POST /api/scan          -> un scan ahora mismo (?ticker=MU) y devuelve el estado nuevo
+
+La página muestra solo tres cosas: veredicto (del flujo institucional
+Pulse), niveles de la cadena Cboe y la tabla de prints institucionales.
+El clasificador viejo sigue corriendo y etiquetando, pero lo que decide
+qué es institucional es el score Pulse (engine.pulse_score).
 """
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 from datetime import datetime, time as dtime
@@ -20,7 +24,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from flow import engine, opra, store, tv_hourly
+from flow import engine, opra, store
 from flow.fetch import DEFAULT_TICKERS, TICKER, clean_ticker, fetch_chain
 
 try:
@@ -34,7 +38,7 @@ ET = ZoneInfo("America/New_York")
 SCAN_INTERVAL_S = 30
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-app = FastAPI(title="FLOW — Institutional Positioning AI")
+app = FastAPI(title="FLOW · Pulse")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 _ACTIVE_TICKER = TICKER
@@ -49,50 +53,35 @@ def market_open(now: datetime | None = None) -> bool:
 
 
 def _enrich_legacy_state(state: dict[str, Any]) -> dict[str, Any]:
-    """Asegura que un state.json guardado antes tenga positioning y campos IA."""
+    """Asegura que un state.json guardado antes tenga veredicto Pulse.
+
+    Los estados viejos traían positioning/vector/gates/setup que la
+    página simple ya no usa: no se reconstruyen (el objetivo del mapa
+    viejo era el que mezclaba dirección y strike sin coherencia).
+    """
     if not state or "verdict" not in state:
         return state
     spot = state.get("spot")
     prints = [engine.normalize_print(p, spot=spot) for p in (state.get("prints") or [])]
     engine.classify_prints_ai(prints, spot=spot, spot_change_pct=state.get("spot_change_pct"))
+    engine.pulse_score(prints)
     state["prints"] = prints
-    v = engine.verdict(prints, streak=int((state.get("verdict") or {}).get("streak") or 1))
+    kept = [p for p in prints if p.get("pulse_keep")]
+    v = engine.verdict(kept, streak=int((state.get("verdict") or {}).get("streak") or 1))
     levels_ = state.get("levels")
     v["invalidation"] = engine.invalidation(v["direction"], levels_, spot)
     state["verdict"] = v
-    state["book"] = engine.book_stats(prints)
-    if "positioning" not in state or not state["positioning"]:
-        state["positioning"] = engine.positioning_map(prints, levels_, v, spot)
-    # Vector/gates/setup/sintético para estados viejos: el vector se
-    # refresca (edad/frescura) sin cambiar de etapa; el setup guardado
-    # se conserva tal cual (recalcularlo en cada lectura inflaría el
-    # contador, porque /api/state no guarda).
-    now_iso = store.now_iso_et()
-    if state.get("vector"):
-        state["vector"] = engine.vector_refresh(state["vector"], now_iso)
-    else:
-        state["vector"] = engine.vector_refresh(
-            engine.vector_update(
-                None, v["direction"], int(v.get("streak") or 1),
-                state.get("updated_at") or now_iso,
-            ),
-            now_iso,
-        )
-    state["gates"] = engine.gates(
-        v, state.get("prints_delay_minutes"), trend=state.get("trend")
-    )
-    if not state.get("setup"):
-        state["setup"] = engine.setup_update(
-            None, v["direction"], state["vector"]["stage"], state["gates"]
-        )
-    if levels_ is not None:
-        levels_["synthetic"] = engine.synthetic_oi(levels_, prints)
+    state["pulse"] = {
+        "kept": len(kept),
+        "discarded": len(prints) - len(kept),
+        "threshold": engine.PULSE_KEEP_THRESHOLD,
+    }
     state.setdefault("available_tickers", DEFAULT_TICKERS)
     return state
 
 
 def run_scan(ticker: str | None = None) -> dict[str, Any]:
-    """Una pasada: cadena -> prints + Filtro IA -> acumular día -> mapa de posicionamiento."""
+    """Una pasada: cadena/OPRA -> prints -> score Pulse -> veredicto + niveles."""
     global _ACTIVE_TICKER
     sym = clean_ticker(ticker or _ACTIVE_TICKER)
     _ACTIVE_TICKER = sym
@@ -148,40 +137,24 @@ def run_scan(ticker: str | None = None) -> dict[str, Any]:
         engine.classify_prints_ai(day_prints, spot=spot, spot_change_pct=spot_change_pct)
         prints_source = source if rows else None
 
+    # Filtro Pulse: solo los prints con score >= 7 cuentan como
+    # institucionales. El veredicto sale SOLO de esos; el resto es ruido
+    # y no vota (ni mueve el veredicto ni la tabla).
+    engine.pulse_score(day_prints)
+    kept = [p for p in day_prints if p.get("pulse_keep")]
+
     # Streak: scans consecutivos con la misma dirección (mismo día).
     prev_state = store.load_state(sym)
     prev_verdict = prev_state.get("verdict") or {}
-    verdict_ = engine.verdict(day_prints)
+    verdict_ = engine.verdict(kept)
     if prev_state.get("date") == today and prev_verdict.get("direction") == verdict_["direction"]:
         streak = int(prev_verdict.get("streak") or 1) + 1
     else:
         streak = 1
-    verdict_ = engine.verdict(day_prints, streak=streak)
+    verdict_ = engine.verdict(kept, streak=streak)
 
     levels_ = engine.levels(rows)
-    sweeps_today = sum(1 for p in day_prints if p.get("sweep"))
     verdict_["invalidation"] = engine.invalidation(verdict_["direction"], levels_, spot)
-
-    # Ciclo Vector + gates + setup (estilo BladeMap). El vector no
-    # cruza días: si el estado previo es de otra sesión, se reinicia.
-    prev_vector = prev_state.get("vector") if prev_state.get("date") == today else None
-    vector_ = engine.vector_update(
-        prev_vector, verdict_["direction"], streak, store.now_iso_et()
-    )
-    # Tendencia horaria TradingView (sidecar Node): nunca bloquea el scan;
-    # si el sidecar falla, trend trae el error y el gate SMA queda en "?".
-    trend_ = tv_hourly.snapshot(sym, spot=spot)
-    gates_ = engine.gates(verdict_, prints_delay, trend=trend_)
-    prev_setup = prev_state.get("setup") if prev_state.get("date") == today else None
-    setup_ = engine.setup_update(
-        prev_setup, verdict_["direction"], vector_["stage"], gates_
-    )
-    if levels_ is not None:
-        levels_["synthetic"] = engine.synthetic_oi(levels_, day_prints)
-    pos_map = engine.positioning_map(day_prints, levels_, verdict_, spot)
-    llm_note = engine.maybe_llm_synthesis(sym, spot, verdict_, pos_map, levels_, day_prints)
-    if llm_note:
-        pos_map["llm_synthesis"] = llm_note
 
     state: dict[str, Any] = {
         "date": today,
@@ -191,22 +164,17 @@ def run_scan(ticker: str | None = None) -> dict[str, Any]:
         "spot_change_pct": spot_change_pct,
         "iv30": iv30,
         "verdict": verdict_,
-        "vector": vector_,
-        "gates": gates_,
-        "trend": trend_,
-        "setup": setup_,
-        "positioning": pos_map,
+        "pulse": {
+            "kept": len(kept),
+            "discarded": len(day_prints) - len(kept),
+            "threshold": engine.PULSE_KEEP_THRESHOLD,
+        },
         "prints": day_prints,
         "levels": levels_,
-        "book": engine.book_stats(day_prints),
-        "targets": engine.targets(day_prints, levels_),
-        "campaigns": engine.campaigns(day_prints),
-        "sweeps_today": sweeps_today,
         "source": prints_source or source,
         "prints_source": prints_source,
         "prints_delay_minutes": prints_delay,
         "market_open": market_open(),
-        "llm_enabled": bool(os.environ.get("GEMINI_API_KEY")),
         "updated_at": datetime.now(ET).isoformat(),
         "error": None
         if (rows or opra_trades)
